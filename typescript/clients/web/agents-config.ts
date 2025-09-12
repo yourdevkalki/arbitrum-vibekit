@@ -29,6 +29,34 @@ export const chatAgents = [
       },
     ],
   },
+
+{
+  id: 'alloc8-camelot-v3-rebalancer' as const,
+  name: 'Camelot v3 LP Rebalancer',
+  description: 'Camelot v3 liquidity position rebalancing agent',
+  suggestedActions: [
+    {
+      title: 'Analyze my ETH/USDC',
+      label: 'pool performance',
+      action: 'Analyze my ETH/USDC pool performance',
+    },
+    {
+      title: 'Start monitoring',
+      label: 'my positions',
+      action: 'Start monitoring my positions in passive mode',
+    },
+    {
+      title: 'Rebalance my WETH/ARB',
+      label: 'position with medium risk',
+      action: 'Rebalance my WETH/ARB position with medium risk',
+    },
+    {
+      title: 'Check if any positions',
+      label: 'need rebalancing',
+      action: 'Check if any positions need rebalancing',
+    },
+  ],
+  },
   // {
   //   id: 'langgraph-workflow' as const,
   //   name: 'Greeting Optimizer',
@@ -133,7 +161,8 @@ export const chatAgents = [
 ] as const;
 
 export const DEFAULT_SERVER_URLS = new Map<ChatAgentId, string>([
-  ['ember-aave', 'http://lending-agent-no-wallet:3001/sse'],
+  // ['ember-aave', 'http://lending-agent-no-wallet:3001/sse'],
+  ['alloc8-camelot-v3-rebalancer', 'http://localhost:3001/sse'],
   ['ember-camelot', 'http://swapping-agent-no-wallet:3005/sse'],
   // ['langgraph-workflow', 'http://langgraph-workflow-agent:3009/sse'],
   // ['quickstart-agent-template', 'http://quickstart-agent-template:3007/sse'],
