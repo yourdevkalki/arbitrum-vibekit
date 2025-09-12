@@ -228,6 +228,38 @@ pnpm build && pnpm test
 
 ### Docker Deployment
 
+#### Quick Start with Docker Compose
+
+```bash
+# Start the agent with basic configuration
+docker-compose up -d
+
+# Start with Redis caching
+docker-compose --profile with-redis up -d
+
+# Start with PostgreSQL database
+docker-compose --profile with-database up -d
+
+# Start with full monitoring stack
+docker-compose --profile monitoring up -d
+
+# Start with reverse proxy
+docker-compose --profile proxy up -d
+
+# Start everything
+docker-compose --profile with-redis --profile with-database --profile monitoring --profile proxy up -d
+```
+
+#### Available Profiles
+
+- **Default**: Just the Camelot rebalancer agent
+- **with-redis**: Adds Redis for caching and session storage
+- **with-database**: Adds PostgreSQL for persistent configuration and performance data
+- **monitoring**: Adds Prometheus and Grafana for metrics and visualization
+- **proxy**: Adds Traefik reverse proxy for load balancing and SSL termination
+
+#### Build and Run Scripts
+
 ```bash
 # Build production image
 pnpm docker:build
@@ -238,6 +270,35 @@ pnpm docker:compose:up
 # Stop services
 pnpm docker:compose:down
 ```
+
+#### Environment Configuration
+
+Create a `.env` file in the project root with your configuration:
+
+```bash
+# Copy the example
+cp .env.example .env
+
+# Edit with your values
+vim .env
+```
+
+#### Health Checks and Monitoring
+
+The Docker setup includes:
+
+- **Health checks**: Automatic container health monitoring
+- **Restart policies**: Automatic recovery from failures
+- **Volume persistence**: Data survives container restarts
+- **Network isolation**: Secure inter-service communication
+- **Resource limits**: Configurable CPU and memory constraints
+
+Access the services:
+
+- **Agent**: http://localhost:3001
+- **Grafana** (if enabled): http://localhost:3000 (admin/admin)
+- **Prometheus** (if enabled): http://localhost:9090
+- **Traefik Dashboard** (if enabled): http://localhost:8080
 
 ## Advanced Configuration
 

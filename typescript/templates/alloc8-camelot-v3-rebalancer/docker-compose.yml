@@ -1,0 +1,178 @@
+version: '3.8'
+
+services:
+  # Camelot v3 LP Rebalancing Agent
+  camelot-rebalancer:
+    build:
+      context: ../../
+      dockerfile: ./templates/alloc8-camelot-v3-rebalancer/Dockerfile.prod
+    ports:
+      - '${PORT:-3001}:${PORT:-3001}'
+    environment:
+      # Agent Configuration
+      - PORT=${PORT:-3001}
+      - NODE_ENV=${NODE_ENV:-production}
+      - ENABLE_CORS=${ENABLE_CORS:-true}
+
+      # AI Provider (Required - at least one)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - XAI_API_KEY=${XAI_API_KEY}
+      - HYPERBOLIC_API_KEY=${HYPERBOLIC_API_KEY}
+
+      # AI Model Selection
+      - AI_PROVIDER=${AI_PROVIDER:-openrouter}
+      - AI_MODEL=${AI_MODEL:-google/gemini-2.5-flash}
+
+      # Network Configuration
+      - ARBITRUM_RPC_URL=${ARBITRUM_RPC_URL:-https://arb1.arbitrum.io/rpc}
+      - EMBER_MCP_SERVER_URL=${EMBER_MCP_SERVER_URL:-https://api.emberai.xyz/mcp}
+      - QUICKNODE_SUBDOMAIN=${QUICKNODE_SUBDOMAIN}
+      - QUICKNODE_API_KEY=${QUICKNODE_API_KEY}
+
+      # Wallet Configuration (For Active Mode)
+      - PRIVATE_KEY=${PRIVATE_KEY}
+      - WALLET_ADDRESS=${WALLET_ADDRESS}
+
+      # Rebalancing Strategy
+      - DEFAULT_RISK_PROFILE=${DEFAULT_RISK_PROFILE:-medium}
+      - DEFAULT_OPERATING_MODE=${DEFAULT_OPERATING_MODE:-passive}
+      - DEFAULT_MONITORING_INTERVAL=${DEFAULT_MONITORING_INTERVAL:-300}
+      - MIN_LIQUIDITY_VALUE=${MIN_LIQUIDITY_VALUE:-100}
+      - MAX_SLIPPAGE=${MAX_SLIPPAGE:-1.0}
+
+      # Monitoring & Alerts
+      - NOTIFICATION_METHOD=${NOTIFICATION_METHOD:-console}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - DEBUG=${DEBUG}
+
+      # Security
+      - RATE_LIMIT_REQUESTS=${RATE_LIMIT_REQUESTS:-100}
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-900000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+
+      # Features
+      - ENABLE_METRICS=${ENABLE_METRICS:-true}
+      - ENABLE_HEALTH_CHECKS=${ENABLE_HEALTH_CHECKS:-true}
+      - MOCK_MODE=${MOCK_MODE:-false}
+
+      # External Services
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
+      - CHAINLINK_API_KEY=${CHAINLINK_API_KEY}
+      - DATADOG_API_KEY=${DATADOG_API_KEY}
+      - SENTRY_DSN=${SENTRY_DSN}
+
+    volumes:
+      # Mount logs directory (optional)
+      - ./logs:/app/logs
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:${PORT:-3001}/health']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.http.routers.camelot-rebalancer.rule=Host(`rebalancer.localhost`)'
+      - 'traefik.http.services.camelot-rebalancer.loadbalancer.server.port=${PORT:-3001}'
+
+  # Optional: Redis for caching and session storage
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    profiles:
+      - 'with-redis'
+
+  # Optional: PostgreSQL for persistent storage
+  postgres:
+    image: postgres:15-alpine
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-rebalancer}
+      - POSTGRES_USER=${POSTGRES_USER:-rebalancer}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    restart: unless-stopped
+    profiles:
+      - 'with-database'
+
+  # Optional: Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - '${PROMETHEUS_PORT:-9090}:9090'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+    profiles:
+      - 'monitoring'
+
+  # Optional: Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - '${GRAFANA_PORT:-3000}:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning
+    restart: unless-stopped
+    profiles:
+      - 'monitoring'
+    depends_on:
+      - prometheus
+
+  # Optional: Reverse proxy with Traefik
+  traefik:
+    image: traefik:v3.0
+    command:
+      - '--api.insecure=true'
+      - '--providers.docker=true'
+      - '--providers.docker.exposedbydefault=false'
+      - '--entrypoints.web.address=:80'
+    ports:
+      - '80:80'
+      - '8080:8080'
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    profiles:
+      - 'proxy'
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  default:
+    name: camelot-rebalancer-network

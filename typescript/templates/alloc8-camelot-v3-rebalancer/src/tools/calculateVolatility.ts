@@ -16,11 +16,7 @@ const calculateVolatilityParametersSchema = z.object({
 
 type CalculateVolatilityParams = z.infer<typeof calculateVolatilityParametersSchema>;
 
-export const calculateVolatilityTool: VibkitToolDefinition<
-  CalculateVolatilityParams,
-  Task,
-  RebalancerContext
-> = {
+export const calculateVolatilityTool: VibkitToolDefinition<any, Task, RebalancerContext> = {
   name: 'calculate-volatility',
   description: 'Calculate volatility metrics for optimal range determination',
   parameters: calculateVolatilityParametersSchema,
@@ -28,12 +24,19 @@ export const calculateVolatilityTool: VibkitToolDefinition<
     try {
       // In production, would fetch real price history from MCP server
       // For now, generate sample price data for demonstration
-      const samplePriceData: PriceData[] = generateSamplePriceData(args.poolPair, args.timeframe);
+      const samplePriceData: PriceData[] = generateSamplePriceData(
+        (args as any).poolPair,
+        (args as any).timeframe
+      );
 
       // Calculate volatility using the strategy engine
-      const volatilityMetrics = calculateVolatility(samplePriceData, args.method, args.timeframe);
+      const volatilityMetrics = calculateVolatility(
+        samplePriceData,
+        (args as any).method,
+        (args as any).timeframe
+      );
 
-      const responseText = `📊 Volatility Analysis for ${args.poolPair}:
+      const responseText = `📊 Volatility Analysis for ${(args as any).poolPair}:
 
 🔍 Method: ${volatilityMetrics.method.toUpperCase()}
 📈 Annualized Volatility: ${(volatilityMetrics.annualizedVolatility * 100).toFixed(2)}%

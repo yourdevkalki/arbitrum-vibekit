@@ -27,32 +27,96 @@ export const getPoolDataTool: VibkitToolDefinition<any, Task, RebalancerContext>
   parameters: getPoolDataParametersSchema,
   execute: async (args: z.infer<typeof getPoolDataParametersSchema>, context) => {
     try {
-      console.log('[GetPoolData] Fetching pool data...', args);
+      console.log('[GetPoolData] Fetching pool data from Ember MCP server...', args);
 
-      // Mock response for template
-      const mockPoolData = {
-        symbol0: 'ETH',
-        symbol1: 'USDC',
-        fee: 3000,
-        tickSpacing: 60,
-        price: '2000.50',
-        liquidity: '1000000',
-        providerId: 'Camelot',
-        token0: { address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', chainId: 42161 },
-        token1: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', chainId: 42161 },
-      };
+      // Get the Ember MCP client from context
+      const emberClient = context.mcpClients?.['ember-onchain'];
+      if (!emberClient) {
+        throw new Error('Ember MCP client not available. Please check your configuration.');
+      }
 
-      const responseText = `📊 Pool Data for ${mockPoolData.symbol0}/${mockPoolData.symbol1}:
+      let poolData: any;
+
+      if (args.poolAddress) {
+        // Query by specific pool address
+        console.log(`[GetPoolData] Querying pool by address: ${args.poolAddress}`);
+        const response = await emberClient.callTool({
+          name: 'getLiquidityPools',
+          arguments: {
+            chainId: '42161', // Arbitrum
+            poolAddress: args.poolAddress,
+          },
+        });
+        poolData = response;
+      } else if (args.poolPair) {
+        // Query by token pair
+        console.log(`[GetPoolData] Querying pool by pair: ${args.poolPair}`);
+        const [token0Symbol, token1Symbol] = args.poolPair.split('/');
+
+        // First get available tokens to resolve addresses
+        const tokensResponse = await emberClient.callTool({
+          name: 'getTokens',
+          arguments: {
+            chainId: '42161',
+          },
+        });
+
+        // Find token addresses from symbols
+        const token0 = context.custom?.tokenMap?.[token0Symbol?.toUpperCase() || '']?.[0];
+        const token1 = context.custom?.tokenMap?.[token1Symbol?.toUpperCase() || '']?.[0];
+
+        if (!token0 || !token1) {
+          throw new Error(`Could not resolve token addresses for pair ${args.poolPair}`);
+        }
+
+        const response = await emberClient.callTool({
+          name: 'getLiquidityPools',
+          arguments: {
+            chainId: '42161',
+            token0Address: token0.address,
+            token1Address: token1.address,
+          },
+        });
+        poolData = response;
+      } else {
+        throw new Error('Either poolAddress or poolPair must be provided');
+      }
+
+      // Extract pool information from response
+      const pools = poolData?.pools || [];
+      if (pools.length === 0) {
+        throw new Error('No pools found for the specified criteria');
+      }
+
+      const pool = pools[0]; // Take the first pool if multiple found
+
+      const responseText = `📊 Pool Data for ${pool.token0?.symbol || 'Token0'}/${pool.token1?.symbol || 'Token1'}:
 
 🏊 Basic Info:
-- Pool Pair: ${mockPoolData.symbol0}/${mockPoolData.symbol1}
-- Fee Tier: ${mockPoolData.fee / 10000}%
-- Tick Spacing: ${mockPoolData.tickSpacing}
-- Current Price: $${mockPoolData.price}
-- Total Liquidity: ${mockPoolData.liquidity}
-- Provider: ${mockPoolData.providerId}
+- Pool Address: ${pool.address || 'N/A'}
+- Pool Pair: ${pool.token0?.symbol || 'Token0'}/${pool.token1?.symbol || 'Token1'}
+- Fee Tier: ${pool.fee ? pool.fee / 10000 : 'N/A'}%
+- Tick Spacing: ${pool.tickSpacing || 'N/A'}
+- Current Price: ${pool.price || 'N/A'}
+- Total Liquidity: ${pool.liquidity || 'N/A'}
+- Provider: Camelot v3
 
-✅ Pool data retrieved successfully (template mode)!`;
+💰 Token Details:
+- Token0: ${pool.token0?.name || 'Unknown'} (${pool.token0?.symbol || 'N/A'})
+- Token1: ${pool.token1?.name || 'Unknown'} (${pool.token1?.symbol || 'N/A'})
+
+${
+  args.includeMetrics
+    ? `
+📈 Additional Metrics:
+- 24h Volume: ${pool.volume24h || 'N/A'}
+- 24h Fees: ${pool.fees24h || 'N/A'}
+- TVL: ${pool.tvl || 'N/A'}
+`
+    : ''
+}
+
+✅ Pool data retrieved successfully from Camelot v3!`;
 
       return {
         id: 'get-pool-data',
@@ -71,7 +135,7 @@ export const getPoolDataTool: VibkitToolDefinition<any, Task, RebalancerContext>
           {
             artifactId: `pool-data-${Date.now()}`,
             name: 'pool-data',
-            parts: [{ kind: 'data', data: { pool: mockPoolData } }],
+            parts: [{ kind: 'data', data: { pool } }],
           },
         ],
       };
@@ -317,33 +381,139 @@ export const mintPositionTool: VibkitToolDefinition<any, Task, RebalancerContext
   name: 'mint-position',
   description: 'Create a new concentrated liquidity position',
   parameters: z.object({
-    poolPair: z.string(),
-    amount0: z.string(),
-    amount1: z.string(),
-    priceFrom: z.string(),
-    priceTo: z.string(),
-    userAddress: z.string(),
+    poolPair: z.string().describe('Token pair (e.g., ETH/USDC)'),
+    amount0: z.string().describe('Amount of first token'),
+    amount1: z.string().describe('Amount of second token'),
+    priceFrom: z.string().describe('Lower price bound'),
+    priceTo: z.string().describe('Upper price bound'),
+    userAddress: z.string().describe('User wallet address'),
+    riskProfile: z
+      .enum(['low', 'medium', 'high'])
+      .optional()
+      .describe('Risk profile for position sizing'),
   }),
   execute: async (args, context) => {
-    return {
-      id: 'mint-position',
-      contextId: `mint-position-${Date.now()}`,
-      kind: 'task',
-      status: {
-        state: TaskState.Completed,
-        message: {
-          role: 'agent',
-          messageId: `msg-${Date.now()}`,
-          kind: 'message',
-          parts: [
-            {
-              kind: 'text',
-              text: `Position created for ${(args as any).poolPair} with range $${(args as any).priceFrom}-$${(args as any).priceTo}`,
-            },
-          ],
+    try {
+      console.log('[MintPosition] Creating new liquidity position...', args);
+
+      // Get the Ember MCP client from context
+      const emberClient = context.mcpClients?.['ember-onchain'];
+      if (!emberClient) {
+        throw new Error('Ember MCP client not available. Please check your configuration.');
+      }
+
+      const [token0Symbol, token1Symbol] = (args as any).poolPair.split('/');
+
+      // Resolve token addresses
+      const token0 = context.custom?.tokenMap?.[token0Symbol?.toUpperCase() || '']?.[0];
+      const token1 = context.custom?.tokenMap?.[token1Symbol?.toUpperCase() || '']?.[0];
+
+      if (!token0 || !token1) {
+        throw new Error(`Could not resolve token addresses for pair ${(args as any).poolPair}`);
+      }
+
+      console.log(
+        `[MintPosition] Resolved tokens: ${token0.symbol} (${token0.address}), ${token1.symbol} (${token1.address})`
+      );
+
+      // Call Ember MCP server to supply liquidity
+      const response = await emberClient.callTool({
+        name: 'supplyLiquidity',
+        arguments: {
+          chainId: '42161', // Arbitrum
+          token0Address: token0.address,
+          token1Address: token1.address,
+          amount0: (args as any).amount0,
+          amount1: (args as any).amount1,
+          priceFrom: (args as any).priceFrom,
+          priceTo: (args as any).priceTo,
+          userAddress: (args as any).userAddress,
+          fee: 3000, // 0.3% fee tier for Camelot v3
+          slippageTolerance: '1.0', // 1% slippage tolerance
         },
-      },
-    };
+      });
+
+      console.log('[MintPosition] Received response from Ember MCP server');
+
+      const responseText = `🎯 Liquidity Position Created Successfully!
+
+📊 Position Details:
+- Pool Pair: ${token0.symbol}/${token1.symbol}
+- Amount ${token0.symbol}: ${(args as any).amount0}
+- Amount ${token1.symbol}: ${(args as any).amount1}
+- Price Range: $${(args as any).priceFrom} - $${(args as any).priceTo}
+- Risk Profile: ${(args as any).riskProfile || 'medium'}
+
+🏊 Pool Information:
+- Network: Arbitrum
+- Protocol: Camelot v3
+- Fee Tier: 0.3%
+
+✅ Position successfully created and ready for earning fees!
+
+💡 Next Steps:
+- Monitor position performance using "check-rebalance-need"
+- Set up automated monitoring with "start-monitoring"
+- Collect fees when accumulated using "collect-fees"`;
+
+      return {
+        id: 'mint-position',
+        contextId: `mint-position-success-${Date.now()}`,
+        kind: 'task',
+        status: {
+          state: TaskState.Completed,
+          message: {
+            role: 'agent',
+            messageId: `msg-${Date.now()}`,
+            kind: 'message',
+            parts: [{ kind: 'text', text: responseText }],
+          },
+        },
+        artifacts: [
+          {
+            artifactId: `position-${Date.now()}`,
+            name: 'liquidity-position',
+            parts: [
+              {
+                kind: 'data',
+                data: {
+                  poolPair: (args as any).poolPair,
+                  token0: token0,
+                  token1: token1,
+                  amount0: (args as any).amount0,
+                  amount1: (args as any).amount1,
+                  priceFrom: (args as any).priceFrom,
+                  priceTo: (args as any).priceTo,
+                  userAddress: (args as any).userAddress,
+                  mcpResponse: response,
+                },
+              },
+            ],
+          },
+        ],
+      };
+    } catch (error) {
+      console.error('[MintPosition] Error:', error);
+      return {
+        id: 'mint-position',
+        contextId: `mint-position-error-${Date.now()}`,
+        kind: 'task',
+        status: {
+          state: TaskState.Failed,
+          message: {
+            role: 'agent',
+            messageId: `msg-${Date.now()}`,
+            kind: 'message',
+            parts: [
+              {
+                kind: 'text',
+                text: `Error creating position: ${(error as Error).message}`,
+              },
+            ],
+          },
+        },
+      };
+    }
   },
 };
 
@@ -351,29 +521,134 @@ export const burnPositionTool: VibkitToolDefinition<any, Task, RebalancerContext
   name: 'burn-position',
   description: 'Remove a concentrated liquidity position',
   parameters: z.object({
-    positionNumber: z.number(),
-    collectFees: z.boolean().default(true),
+    positionId: z.string().describe('Position token ID or identifier'),
+    userAddress: z.string().describe('User wallet address'),
+    collectFees: z.boolean().default(true).describe('Whether to collect fees before burning'),
   }),
   execute: async (args, context) => {
-    return {
-      id: 'burn-position',
-      contextId: `burn-position-${Date.now()}`,
-      kind: 'task',
-      status: {
-        state: TaskState.Completed,
-        message: {
-          role: 'agent',
-          messageId: `msg-${Date.now()}`,
-          kind: 'message',
-          parts: [
-            {
-              kind: 'text',
-              text: `Position #${(args as any).positionNumber} removed successfully`,
-            },
-          ],
+    try {
+      console.log('[BurnPosition] Removing liquidity position...', args);
+
+      // Get the Ember MCP client from context
+      const emberClient = context.mcpClients?.['ember-onchain'];
+      if (!emberClient) {
+        throw new Error('Ember MCP client not available. Please check your configuration.');
+      }
+
+      // First get user positions to find the specific position
+      console.log('[BurnPosition] Fetching user positions...');
+      const positionsResponse = await emberClient.callTool({
+        name: 'getWalletLiquidityPositions',
+        arguments: {
+          chainId: '42161', // Arbitrum
+          walletAddress: (args as any).userAddress,
         },
-      },
-    };
+      });
+
+      // Find the specific position
+      const positions = Array.isArray(positionsResponse?.positions)
+        ? positionsResponse.positions
+        : [];
+      const targetPosition = positions.find(
+        (pos: any) =>
+          pos.tokenId === (args as any).positionId || pos.id === (args as any).positionId
+      );
+
+      if (!targetPosition) {
+        throw new Error(
+          `Position ${(args as any).positionId} not found for user ${(args as any).userAddress}`
+        );
+      }
+
+      console.log(`[BurnPosition] Found position: ${targetPosition.tokenId || targetPosition.id}`);
+
+      // Call Ember MCP server to withdraw liquidity
+      const response = await emberClient.callTool({
+        name: 'withdrawLiquidity',
+        arguments: {
+          chainId: '42161', // Arbitrum
+          positionId: (args as any).positionId,
+          userAddress: (args as any).userAddress,
+          amount: '100', // Withdraw 100% of the position
+          collectFees: (args as any).collectFees,
+        },
+      });
+
+      console.log('[BurnPosition] Received response from Ember MCP server');
+
+      const responseText = `🔥 Liquidity Position Removed Successfully!
+
+📊 Position Details:
+- Position ID: ${(args as any).positionId}
+- Pool: ${targetPosition.token0?.symbol || 'Token0'}/${targetPosition.token1?.symbol || 'Token1'}
+- Liquidity Removed: ${targetPosition.liquidity || 'N/A'}
+- ${(args as any).collectFees ? '💰 Fees collected before removal' : '⚠️ Fees not collected'}
+
+💸 Withdrawal Information:
+- Token0 Amount: ${targetPosition.amount0 || 'N/A'} ${targetPosition.token0?.symbol || ''}
+- Token1 Amount: ${targetPosition.amount1 || 'N/A'} ${targetPosition.token1?.symbol || ''}
+- Network: Arbitrum
+- Protocol: Camelot v3
+
+✅ Position successfully removed and tokens returned to wallet!
+
+💡 Transaction Details:
+${response?.transactionHash ? `- TX Hash: ${response.transactionHash}` : '- Transaction prepared for signing'}`;
+
+      return {
+        id: 'burn-position',
+        contextId: `burn-position-success-${Date.now()}`,
+        kind: 'task',
+        status: {
+          state: TaskState.Completed,
+          message: {
+            role: 'agent',
+            messageId: `msg-${Date.now()}`,
+            kind: 'message',
+            parts: [{ kind: 'text', text: responseText }],
+          },
+        },
+        artifacts: [
+          {
+            artifactId: `burn-position-${Date.now()}`,
+            name: 'position-removal',
+            parts: [
+              {
+                kind: 'data',
+                data: {
+                  positionId: (args as any).positionId,
+                  userAddress: (args as any).userAddress,
+                  position: targetPosition,
+                  collectFees: (args as any).collectFees,
+                  mcpResponse: response,
+                },
+              },
+            ],
+          },
+        ],
+      };
+    } catch (error) {
+      console.error('[BurnPosition] Error:', error);
+      return {
+        id: 'burn-position',
+        contextId: `burn-position-error-${Date.now()}`,
+        kind: 'task',
+        status: {
+          state: TaskState.Failed,
+          message: {
+            role: 'agent',
+            messageId: `msg-${Date.now()}`,
+            kind: 'message',
+            parts: [
+              {
+                kind: 'text',
+                text: `Error removing position: ${(error as Error).message}`,
+              },
+            ],
+          },
+        },
+      };
+    }
   },
 };
 

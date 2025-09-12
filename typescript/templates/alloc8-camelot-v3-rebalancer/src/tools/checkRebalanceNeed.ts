@@ -16,11 +16,7 @@ const checkRebalanceNeedParametersSchema = z.object({
 
 type CheckRebalanceNeedParams = z.infer<typeof checkRebalanceNeedParametersSchema>;
 
-export const checkRebalanceNeedTool: VibkitToolDefinition<
-  CheckRebalanceNeedParams,
-  Task,
-  RebalancerContext
-> = {
+export const checkRebalanceNeedTool: VibkitToolDefinition<any, Task, RebalancerContext> = {
   name: 'check-rebalance-need',
   description: 'Check if positions need rebalancing based on current market conditions',
   parameters: checkRebalanceNeedParametersSchema,
@@ -30,10 +26,10 @@ export const checkRebalanceNeedTool: VibkitToolDefinition<
       needsRebalance: Math.random() > 0.5,
       currentEfficiency: Math.random() * 100,
       potentialImprovement: Math.random() * 50,
-      riskLevel: args.riskProfile,
+      riskLevel: (args as any).riskProfile,
     };
 
-    const responseText = `🔍 Rebalance Assessment ${args.checkAll ? 'for All Positions' : `for Position #${args.positionNumber}`}:
+    const responseText = `🔍 Rebalance Assessment ${(args as any).checkAll ? 'for All Positions' : `for Position #${(args as any).positionNumber}`}:
 
 📊 Analysis Results:
 - Current Efficiency: ${mockAnalysis.currentEfficiency.toFixed(1)}%
