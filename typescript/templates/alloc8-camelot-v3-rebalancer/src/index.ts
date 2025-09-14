@@ -101,21 +101,29 @@ async function startAgent() {
 
       console.log('\n⚙️  Rebalancing Configuration:');
       console.log(`   - Mode: ${config.mode}`);
+      console.log(`   - Discovery Mode: ${config.discoveryMode}`);
       console.log(`   - Risk Profile: ${config.riskProfile}`);
       console.log(`   - Check Interval: ${config.checkInterval / 1000}s`);
 
-      if (config.poolId && config.token0 && config.token1) {
-        console.log(`   - Target Pool: ${config.token0}/${config.token1}`);
+      if (config.discoveryMode === 'single-pool') {
+        if (config.poolId && config.token0 && config.token1) {
+          console.log(`   - Target Pool: ${config.token0}/${config.token1} (${config.poolId})`);
+        } else {
+          console.log('   - Target Pool: Not configured (set POOL_ID, TOKEN_0, TOKEN_1)');
+        }
       } else {
-        console.log('   - Target Pool: Not configured (set POOL_ID, TOKEN_0, TOKEN_1)');
+        console.log(`   - Auto-Discovery: Enabled on chains [${config.chainIds.join(', ')}]`);
+        console.log('   - Will monitor all active LP positions for configured wallet');
       }
 
       console.log('\n🚀 Ready to start monitoring! Use the monitoring skill to begin.');
     } catch (configError) {
       console.log('\n⚠️  Configuration incomplete. Please check your .env file:');
-      console.log('   - POOL_ID: Camelot v3 pool address');
-      console.log('   - TOKEN_0: First token symbol');
-      console.log('   - TOKEN_1: Second token symbol');
+      console.log('   - DISCOVERY_MODE: auto-discover or single-pool');
+      console.log('   - CHAIN_IDS: Comma-separated chain IDs (for auto-discovery)');
+      console.log('   - POOL_ID: Camelot v3 pool address (for single-pool mode)');
+      console.log('   - TOKEN_0: First token symbol (for single-pool mode)');
+      console.log('   - TOKEN_1: Second token symbol (for single-pool mode)');
       console.log('   - WALLET_PRIVATE_KEY: Wallet private key');
       console.log('   - TELEGRAM_BOT_TOKEN: (optional) Telegram bot token');
       console.log('   - TELEGRAM_CHAT_ID: (optional) Telegram chat ID');

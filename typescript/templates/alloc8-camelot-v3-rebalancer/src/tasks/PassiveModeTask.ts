@@ -15,17 +15,24 @@ export class PassiveModeTask extends BaseRebalanceTask {
   }
 
   protected async run(): Promise<void> {
-    const evaluation = await this.fetchAndEvaluate();
+    const evaluations = await this.fetchAndEvaluate();
 
-    if (!evaluation) {
+    if (evaluations.length === 0) {
       console.log('ℹ️  No positions to evaluate');
       return;
     }
 
-    if (evaluation.needsRebalance) {
-      await this.sendRebalanceAlert(evaluation);
+    // Check each position and send alerts for those needing rebalance
+    const positionsNeedingRebalance = evaluations.filter(e => e.needsRebalance);
+
+    if (positionsNeedingRebalance.length > 0) {
+      console.log(`🚨 ${positionsNeedingRebalance.length} positions need rebalancing`);
+
+      for (const evaluation of positionsNeedingRebalance) {
+        await this.sendRebalanceAlert(evaluation);
+      }
     } else {
-      console.log('✅ Position is healthy, no rebalance needed');
+      console.log(`✅ All ${evaluations.length} positions are healthy, no rebalance needed`);
     }
   }
 
@@ -36,7 +43,9 @@ export class PassiveModeTask extends BaseRebalanceTask {
     if (!this.context.telegramBot || !this.context.config.telegramChatId) {
       console.log('⚠️  Telegram not configured, logging alert instead:');
       console.log('🚨 REBALANCE ALERT:');
-      console.log(`   Pool: ${this.context.config.token0}/${this.context.config.token1}`);
+      console.log(`   Position: ${evaluation.positionId}`);
+      console.log(`   Pool: ${evaluation.tokenPair} (${evaluation.poolAddress})`);
+      console.log(`   Chain: ${evaluation.chainId}`);
       console.log(`   Reason: ${evaluation.reason}`);
       console.log(
         `   Current range: $${evaluation.currentRange.priceRange[0].toFixed(6)} - $${evaluation.currentRange.priceRange[1].toFixed(6)}`
@@ -74,7 +83,10 @@ export class PassiveModeTask extends BaseRebalanceTask {
 
     return `🚨 *LP Rebalance Alert*
     
-📊 *Pool:* ${this.context.config.token0}/${this.context.config.token1}
+📊 *Position:* ${evaluation.tokenPair}
+🆔 *ID:* \`${evaluation.positionId}\`
+🌐 *Chain:* ${evaluation.chainId}
+📍 *Pool:* \`${evaluation.poolAddress.slice(0, 10)}...\`
 ⏰ *Time:* ${timestamp}
 🔍 *Mode:* Passive (Alert Only)
 

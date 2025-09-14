@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { defineSkill } from 'arbitrum-vibekit-core';
 import {
   getWalletLiquidityPositionsTool,
+  fetchWalletPositionsTool,
   getLiquidityPoolsTool,
   getTokenMarketDataTool,
   withdrawLiquidityTool,
@@ -31,32 +32,21 @@ export const rebalancingSkill = defineSkill({
   tags: ['defi', 'liquidity', 'camelot', 'rebalancing', 'yield', 'v3'],
   examples: [
     'Analyze my current LP positions',
+    'Fetch all my active positions automatically',
     'Check if my ETH/USDC position needs rebalancing',
     'Rebalance my position to optimal range',
     'Withdraw liquidity from position 123',
     'Supply liquidity to ETH/USDC pool',
     'Get market data for my tokens',
     'What are my current token balances?',
+    'Show me all positions across all chains',
   ],
   inputSchema: rebalancingSkillInputSchema,
-  mcpServers: {
-    'ember-onchain': {
-      url: process.env.EMBER_MCP_SERVER_URL || 'https://api.emberai.xyz/mcp',
-      alwaysAllow: [
-        'getCapabilities',
-        'getWalletLiquidityPositions',
-        'getLiquidityPools',
-        'getTokenMarketData',
-        'withdrawLiquidity',
-        'supplyLiquidity',
-        'swapTokens',
-        'getWalletBalances',
-      ],
-      disabled: false,
-    },
-  },
+  // No MCP servers needed - using direct GraphQL fetching for positions
+  // Other tools may still use MCP servers for market data and transactions
   tools: [
     getWalletLiquidityPositionsTool,
+    fetchWalletPositionsTool,
     getLiquidityPoolsTool,
     getTokenMarketDataTool,
     withdrawLiquidityTool,

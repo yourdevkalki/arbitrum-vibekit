@@ -5,10 +5,15 @@ An automated liquidity position rebalancing agent for Camelot v3 concentrated li
 ## 🎯 Features
 
 - **Automated Rebalancing**: Dynamically adjusts LP ranges based on market conditions
+- **Auto-Discovery**: Automatically fetches and monitors all active LP positions from wallet
+- **Multi-Chain Support**: Monitor positions across multiple chains (Arbitrum, Ethereum, etc.)
 - **Risk Management**: User-selectable risk profiles (low, medium, high)
 - **Dual Operating Modes**:
   - **Passive Mode**: Monitors positions and sends alerts via Telegram
   - **Active Mode**: Automatically executes rebalances on-chain
+- **Flexible Discovery Modes**:
+  - **Auto-Discover**: Monitor all wallet positions across specified chains
+  - **Single-Pool**: Focus on a specific pool address
 - **Real-time Monitoring**: Configurable check intervals (default: 1 hour)
 - **Comprehensive Analytics**: APR tracking, fee calculations, and position health scoring
 - **Telegram Integration**: Rich notifications for alerts and confirmations
@@ -73,19 +78,62 @@ An automated liquidity position rebalancing agent for Camelot v3 concentrated li
 
 ## ⚙️ Configuration
 
+### Position Discovery Modes
+
+The agent supports two discovery modes:
+
+#### 1. Auto-Discovery Mode (Recommended)
+
+Automatically fetches and monitors **all active LP positions** from your wallet across multiple chains:
+
+```bash
+# Discovery Configuration
+DISCOVERY_MODE=auto-discover
+CHAIN_IDS=42161,1              # Arbitrum and Ethereum
+
+# AI Provider (at least one required)
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Wallet
+WALLET_PRIVATE_KEY=your_wallet_private_key_here
+```
+
+**Benefits:**
+
+- No need to manually specify pool addresses
+- Monitors all your positions automatically
+- Multi-chain support
+- Scales with your portfolio
+
+#### 2. Single-Pool Mode
+
+Focus monitoring on a specific pool:
+
+```bash
+# Discovery Configuration
+DISCOVERY_MODE=single-pool
+POOL_ID=0x...                  # Specific Camelot v3 pool address
+TOKEN_0=ETH                    # First token symbol
+TOKEN_1=USDC                   # Second token symbol
+
+# AI Provider (at least one required)
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Wallet
+WALLET_PRIVATE_KEY=your_wallet_private_key_here
+```
+
 ### Required Environment Variables
 
 ```bash
 # AI Provider (at least one required)
 OPENAI_API_KEY=your_openai_api_key_here
 
-# Pool Configuration
-POOL_ID=0x...            # Camelot v3 pool address
-TOKEN_0=ETH              # First token symbol
-TOKEN_1=USDC             # Second token symbol
-
 # Wallet
 WALLET_PRIVATE_KEY=your_wallet_private_key_here
+
+# Discovery Mode
+DISCOVERY_MODE=auto-discover    # or single-pool
 ```
 
 ### Optional Configuration
@@ -160,6 +208,31 @@ Once the agent is running, you can interact with it via MCP calls:
   }
 }
 ```
+
+#### Auto-Discovery Tool
+
+Use the new `fetchWalletPositions` tool to automatically discover all active positions:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "fetchWalletPositions",
+    "arguments": {
+      "chainIds": [42161, 1],
+      "activeOnly": true
+    }
+  }
+}
+```
+
+**Response includes:**
+
+- Position details with enhanced metadata
+- Token symbols and decimals
+- Current price and price ranges
+- Position utilization rates
+- Summary statistics across all chains
 
 ## 🤖 A2A Tasks
 

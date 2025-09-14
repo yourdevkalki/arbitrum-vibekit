@@ -9,9 +9,13 @@ export function loadAgentConfig(): AgentConfig {
   const config = {
     mode: process.env.REBALANCER_MODE || 'passive',
     riskProfile: process.env.RISK_PROFILE || 'medium',
+    discoveryMode: process.env.DISCOVERY_MODE || 'auto-discover',
     poolId: process.env.POOL_ID,
     token0: process.env.TOKEN_0,
     token1: process.env.TOKEN_1,
+    chainIds: process.env.CHAIN_IDS
+      ? process.env.CHAIN_IDS.split(',').map(id => parseInt(id.trim(), 10))
+      : [42161],
     checkInterval: process.env.CHECK_INTERVAL ? parseInt(process.env.CHECK_INTERVAL, 10) : 3600000,
     priceDeviationThreshold: process.env.PRICE_DEVIATION_THRESHOLD
       ? parseFloat(process.env.PRICE_DEVIATION_THRESHOLD)

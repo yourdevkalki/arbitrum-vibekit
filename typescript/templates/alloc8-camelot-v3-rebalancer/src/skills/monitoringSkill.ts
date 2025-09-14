@@ -264,6 +264,7 @@ export const monitoringSkill = defineSkill({
     'Check if monitoring is running',
   ],
   inputSchema: monitoringSkillInputSchema,
+  // No MCP servers needed - using direct GraphQL fetching
   tools: [startMonitoringTool, stopMonitoringTool, getMonitoringStatusTool],
   // No manual handler - use LLM orchestration for flexible routing
 });

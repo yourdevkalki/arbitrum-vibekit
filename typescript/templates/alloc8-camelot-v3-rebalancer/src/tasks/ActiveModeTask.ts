@@ -18,18 +18,35 @@ export class ActiveModeTask extends BaseRebalanceTask {
   }
 
   protected async run(): Promise<void> {
-    const evaluation = await this.fetchAndEvaluate();
+    const evaluations = await this.fetchAndEvaluate();
 
-    if (!evaluation) {
+    if (evaluations.length === 0) {
       console.log('ℹ️  No positions to evaluate');
       return;
     }
 
-    if (evaluation.needsRebalance) {
-      console.log('🔄 Rebalance needed, executing automatically...');
-      await this.executeRebalance(evaluation);
+    // Execute rebalance for each position that needs it
+    const positionsNeedingRebalance = evaluations.filter(e => e.needsRebalance);
+
+    if (positionsNeedingRebalance.length > 0) {
+      console.log(
+        `🔄 ${positionsNeedingRebalance.length} positions need rebalancing, executing automatically...`
+      );
+
+      for (const evaluation of positionsNeedingRebalance) {
+        try {
+          await this.executeRebalance(evaluation);
+        } catch (error) {
+          console.error(
+            `❌ Failed to rebalance position ${(evaluation as any).positionId}:`,
+            error
+          );
+          // Continue with other positions even if one fails
+          continue;
+        }
+      }
     } else {
-      console.log('✅ Position is healthy, no rebalance needed');
+      console.log(`✅ All ${evaluations.length} positions are healthy, no rebalance needed`);
     }
   }
 
@@ -38,11 +55,15 @@ export class ActiveModeTask extends BaseRebalanceTask {
    */
   private async executeRebalance(evaluation: any): Promise<void> {
     try {
-      const positionId = this.context.monitoringState.currentPositions[0];
+      const positionId = evaluation.positionId;
+      const chainId = evaluation.chainId;
+      const poolAddress = evaluation.poolAddress;
 
       if (!positionId) {
         throw new Error('No position ID available for rebalancing');
       }
+
+      console.log(`🔄 Rebalancing position ${positionId} on chain ${chainId}...`);
 
       // Step 1: Withdraw current liquidity
       console.log('🔄 Step 1: Withdrawing current liquidity...');
@@ -66,13 +87,13 @@ export class ActiveModeTask extends BaseRebalanceTask {
 
       // Step 3: Supply liquidity at new range
       console.log('🔄 Step 3: Supplying liquidity at new range...');
-      const supplyResult = await this.supplyLiquidityAtNewRange(evaluation);
+      const supplyResult = await this.supplyLiquidityAtNewRange(evaluation, poolAddress, chainId);
 
       if (!supplyResult.success) {
         throw new Error(`Liquidity supply failed: ${supplyResult.error}`);
       }
 
-      console.log('✅ Rebalance completed successfully!');
+      console.log(`✅ Rebalance completed successfully for position ${positionId}!`);
 
       // Send success notification
       await this.sendRebalanceConfirmation(evaluation, supplyResult.transactionHash!);
@@ -181,7 +202,11 @@ export class ActiveModeTask extends BaseRebalanceTask {
   /**
    * Supply liquidity at the new optimal range
    */
-  private async supplyLiquidityAtNewRange(evaluation: any): Promise<TransactionResult> {
+  private async supplyLiquidityAtNewRange(
+    evaluation: any,
+    poolAddress: string,
+    chainId: number
+  ): Promise<TransactionResult> {
     // Get current wallet balances to determine amounts
     const walletAddress = getWalletAddressFromPrivateKey(this.context.config.walletPrivateKey);
 
@@ -217,7 +242,8 @@ export class ActiveModeTask extends BaseRebalanceTask {
         params: {
           name: 'supplyLiquidity',
           arguments: {
-            poolAddress: this.context.config.poolId,
+            poolAddress,
+            chainId,
             tickLower: evaluation.suggestedRange.tickLower,
             tickUpper: evaluation.suggestedRange.tickUpper,
             amount0Desired,
@@ -251,7 +277,9 @@ export class ActiveModeTask extends BaseRebalanceTask {
     try {
       const message = `✅ *Rebalance Completed*
       
-📊 *Pool:* ${this.context.config.token0}/${this.context.config.token1}
+📊 *Position:* ${evaluation.tokenPair}
+🆔 *ID:* \`${evaluation.positionId}\`
+🌐 *Chain:* ${evaluation.chainId}
 ⏰ *Time:* ${new Date().toLocaleString()}
 🔄 *Mode:* Active (Auto-executed)
 

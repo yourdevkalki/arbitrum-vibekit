@@ -1,5 +1,6 @@
 // Export all tools
 export { getWalletLiquidityPositionsTool } from './getWalletLiquidityPositions.js';
+export { fetchWalletPositionsTool } from './fetchWalletPositions.js';
 export { getLiquidityPoolsTool } from './getLiquidityPools.js';
 export { getTokenMarketDataTool } from './getTokenMarketData.js';
 export { withdrawLiquidityTool } from './withdrawLiquidity.js';
