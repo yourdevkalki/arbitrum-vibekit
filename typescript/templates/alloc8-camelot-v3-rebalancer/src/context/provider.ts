@@ -7,7 +7,10 @@ import type { RebalancerContext, ContextDependencies } from './types.js';
  * Context provider for the rebalancing agent
  * Provides shared resources and configuration to all tools and skills
  */
-export const contextProvider = async (deps: ContextDependencies) => {
+export const contextProvider = async (deps: {
+  mcpClients: Record<string, any>;
+  llmModel?: any;
+}) => {
   // Load configuration
   const config = loadAgentConfig();
 
@@ -35,6 +38,7 @@ export const contextProvider = async (deps: ContextDependencies) => {
   return {
     config,
     mcpClients: deps.mcpClients,
+    llm: deps.llmModel,
     telegramBot,
     rpcProvider: {
       url: config.arbitrumRpcUrl,

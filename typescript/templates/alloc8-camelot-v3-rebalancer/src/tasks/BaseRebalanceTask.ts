@@ -189,110 +189,99 @@ export abstract class BaseRebalanceTask {
         try {
           console.log(`\n🔍 Evaluating position ${position.positionId}...`);
 
-          // Get pool data
-          const poolResponse = await this.context.mcpClients['ember-onchain']!.request(
-            {
-              method: 'tools/call',
-              params: {
-                name: 'getLiquidityPools',
-                arguments: {
-                  poolAddress: position.poolAddress,
-                  chainId: position.chainId,
-                },
-              },
+          // Calculate current price from position data
+          const currentPrice = parseFloat(position.currentPrice || '0');
+          if (currentPrice === 0) {
+            console.warn(`⚠️  Invalid price data for position ${position.positionId}`);
+            continue;
+          }
+
+          // Calculate KPIs for the pool
+          const kpiResponse = await this.calculatePoolKPIs(position, currentPrice);
+          if (!kpiResponse.success) {
+            console.warn(
+              `⚠️  Could not calculate KPIs for position ${position.positionId}: ${kpiResponse.error}`
+            );
+            continue;
+          }
+
+          const kpis = kpiResponse.data;
+
+          // Analyze position with LLM
+          const analysisResponse = await this.analyzePositionWithLLM(position, kpis);
+          if (!analysisResponse.success) {
+            console.warn(
+              `⚠️  Could not analyze position ${position.positionId}: ${analysisResponse.error}`
+            );
+            continue;
+          }
+
+          const analysis = analysisResponse.data;
+
+          // Calculate price deviation
+          const priceDeviation = this.calculatePriceDeviation(position, currentPrice);
+
+          // Check if rebalancing is needed based on LLM analysis
+          const needsRebalance =
+            analysis.recommendation.action === 'rebalance' &&
+            analysis.recommendation.confidence > 0.6;
+
+          const evaluation: RebalanceEvaluation = {
+            positionId: position.positionId,
+            poolAddress: position.poolAddress,
+            currentPrice,
+            priceDeviation,
+            needsRebalance,
+            currentRange: {
+              lower: position.tickLower,
+              upper: position.tickUpper,
             },
-            z.any()
-          );
-
-          if (!(poolResponse as any).result?.content) {
-            console.warn(`⚠️  Could not get pool data for position ${position.positionId}`);
-            continue;
-          }
-
-          const pools: PoolState[] = JSON.parse((poolResponse as any).result.content[0].text);
-          const poolState = pools[0];
-
-          if (!poolState) {
-            console.warn(`⚠️  Pool state not found for position ${position.positionId}`);
-            continue;
-          }
-
-          // Get token market data - use symbols if available, otherwise addresses
-          const token0Identifier = position.token0Symbol || position.token0;
-          const token1Identifier = position.token1Symbol || position.token1;
-
-          const marketDataResponse = await this.context.mcpClients['ember-onchain']!.request(
-            {
-              method: 'tools/call',
-              params: {
-                name: 'getTokenMarketData',
-                arguments: {
-                  tokens: [token0Identifier, token1Identifier],
-                  chainId: position.chainId,
-                },
-              },
+            isInRange: position.isInRange,
+            liquidity: position.liquidity,
+            fees: {
+              token0: position.fees0,
+              token1: position.fees1,
             },
-            z.any()
-          );
-
-          if (!(marketDataResponse as any).result?.content) {
-            console.warn(`⚠️  Could not get market data for position ${position.positionId}`);
-            continue;
-          }
-
-          const marketData: TokenMarketData[] = JSON.parse(
-            (marketDataResponse as any).result.content[0].text
-          );
-          const token0Data = marketData.find(
-            t =>
-              t.symbol === token0Identifier ||
-              t.address.toLowerCase() === position.token0.toLowerCase()
-          );
-          const token1Data = marketData.find(
-            t =>
-              t.symbol === token1Identifier ||
-              t.address.toLowerCase() === position.token1.toLowerCase()
-          );
-
-          if (!token0Data || !token1Data) {
-            console.warn(`⚠️  Token market data not found for position ${position.positionId}`);
-            continue;
-          }
-
-          // Evaluate the position
-          const evaluation = evaluateRebalanceNeed(
-            position,
-            poolState,
-            token0Data,
-            token1Data,
-            this.context.config.riskProfile
-          );
-
-          // Add position metadata to evaluation
-          (evaluation as any).positionId = position.positionId;
-          (evaluation as any).chainId = position.chainId;
-          (evaluation as any).poolAddress = position.poolAddress;
-          (evaluation as any).tokenPair =
-            position.token0Symbol && position.token1Symbol
-              ? `${position.token0Symbol}/${position.token1Symbol}`
-              : `${position.token0.slice(0, 6)}.../${position.token1.slice(0, 6)}...`;
+            recommendation: needsRebalance
+              ? {
+                  action: analysis.recommendation.action,
+                  newRange: {
+                    lower:
+                      analysis.recommendation.new_range?.lower_tick ||
+                      analysis.recommendation.new_range?.lower,
+                    upper:
+                      analysis.recommendation.new_range?.upper_tick ||
+                      analysis.recommendation.new_range?.upper,
+                  },
+                  confidence: analysis.recommendation.confidence,
+                  reasoning: analysis.recommendation.reasoning,
+                }
+              : undefined,
+            kpis: kpis,
+            llmAnalysis: analysis,
+            timestamp: new Date(),
+          };
 
           evaluations.push(evaluation);
 
           console.log(`📊 Position ${position.positionId} evaluation:`);
-          console.log(`   Token pair: ${(evaluation as any).tokenPair}`);
-          console.log(`   Chain ID: ${position.chainId}`);
-          console.log(`   Needs rebalance: ${evaluation.needsRebalance ? '✅ YES' : '❌ NO'}`);
-          console.log(`   Reason: ${evaluation.reason}`);
           console.log(
-            `   Current range: $${evaluation.currentRange.priceRange[0].toFixed(6)} - $${evaluation.currentRange.priceRange[1].toFixed(6)}`
+            `   Token pair: ${position.token0Symbol || position.token0.slice(0, 6)}.../${position.token1Symbol || position.token1.slice(0, 6)}...`
+          );
+          console.log(`   Current price: $${currentPrice.toFixed(6)}`);
+          console.log(`   Price deviation: ${(priceDeviation * 100).toFixed(2)}%`);
+          console.log(`   In range: ${position.isInRange ? '✅' : '❌'}`);
+          console.log(`   Needs rebalance: ${needsRebalance ? '🔄 YES' : '✅ NO'}`);
+          console.log(
+            `   LLM confidence: ${(analysis.recommendation.confidence * 100).toFixed(1)}%`
           );
 
-          if (evaluation.needsRebalance) {
+          if (needsRebalance && evaluation.recommendation) {
+            console.log(`   Recommendation: ${evaluation.recommendation.action}`);
             console.log(
-              `   Suggested range: $${evaluation.suggestedRange.priceRange[0].toFixed(6)} - $${evaluation.suggestedRange.priceRange[1].toFixed(6)}`
+              `   New range: [${evaluation.recommendation.newRange.lower}, ${evaluation.recommendation.newRange.upper}]`
             );
-            console.log(`   APR improvement: +${evaluation.estimatedAprImprovement.toFixed(2)}%`);
+            console.log(`   Reasoning: ${evaluation.recommendation.reasoning}`);
           }
         } catch (positionError) {
           console.error(`❌ Error evaluating position ${position.positionId}:`, positionError);
@@ -311,6 +300,124 @@ export abstract class BaseRebalanceTask {
     } catch (error) {
       console.error('❌ Error in fetchAndEvaluate:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Calculate price deviation from position range
+   */
+  protected calculatePriceDeviation(position: PoolPosition, currentPrice: number): number {
+    // Convert ticks to prices
+    const lowerPrice = Math.pow(1.0001, position.tickLower);
+    const upperPrice = Math.pow(1.0001, position.tickUpper);
+    const rangeCenter = (lowerPrice + upperPrice) / 2;
+    const rangeWidth = upperPrice - lowerPrice;
+
+    // Calculate deviation as percentage of range width
+    // If range width is very small, use a different approach
+    if (rangeWidth < 0.001) {
+      // For very tight ranges, calculate deviation as percentage of current price
+      return Math.abs(currentPrice - rangeCenter) / currentPrice;
+    }
+
+    const deviation = Math.abs(currentPrice - rangeCenter) / (rangeWidth / 2);
+    return Math.min(deviation, 10); // Cap at 1000% to avoid astronomical values
+  }
+
+  /**
+   * Calculate pool KPIs using the KPI calculator tool
+   */
+  protected async calculatePoolKPIs(position: PoolPosition, currentPrice: number) {
+    try {
+      // Import the KPI calculator tool
+      const { calculatePoolKPIsTool } = await import('../tools/calculatePoolKPIs.js');
+
+      // Create AgentContext wrapper
+      const agentContext = {
+        custom: this.context,
+        mcpClients: this.context.mcpClients,
+        llm: this.context.llm,
+      };
+
+      // Execute the KPI calculation
+      const result = await calculatePoolKPIsTool.execute(
+        {
+          poolAddress: position.poolAddress,
+          positionRange: {
+            lower: position.tickLower,
+            upper: position.tickUpper,
+          },
+          currentPrice: currentPrice,
+          tickSpacing: 1, // Default tick spacing for Camelot v3
+        },
+        agentContext
+      );
+
+      if ('artifacts' in result && result.artifacts && result.artifacts.length > 0) {
+        const artifact = result.artifacts[0];
+        if (artifact && artifact.parts && artifact.parts.length > 0) {
+          const part = artifact.parts[0];
+          if (part && 'text' in part) {
+            const kpis = JSON.parse(part.text);
+            return { success: true, data: kpis };
+          }
+        }
+      }
+      return { success: false, error: 'No valid artifacts returned from KPI calculation' };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to calculate KPIs',
+      };
+    }
+  }
+
+  /**
+   * Analyze position with LLM using the analysis tool
+   */
+  protected async analyzePositionWithLLM(position: PoolPosition, kpis: any) {
+    try {
+      // Import the LLM analysis tool
+      const { analyzePositionWithLLMTool } = await import('../tools/analyzePositionWithLLM.js');
+
+      // Create AgentContext wrapper
+      const agentContext = {
+        custom: this.context,
+        mcpClients: this.context.mcpClients,
+        llm: this.context.llm,
+      };
+
+      // Execute the LLM analysis
+      const result = await analyzePositionWithLLMTool.execute(
+        {
+          positionId: position.positionId,
+          poolAddress: position.poolAddress,
+          currentRange: {
+            lower: position.tickLower,
+            upper: position.tickUpper,
+          },
+          kpis: kpis,
+          riskProfile: this.context.config.riskProfile as 'conservative' | 'medium' | 'aggressive',
+        },
+        agentContext
+      );
+
+      if ('artifacts' in result && result.artifacts && result.artifacts.length > 0) {
+        const artifact = result.artifacts[0];
+        if (artifact && artifact.parts && artifact.parts.length > 0) {
+          const part = artifact.parts[0];
+          if (part && 'text' in part) {
+            const analysis = JSON.parse(part.text);
+            return { success: true, data: analysis };
+          }
+        }
+      }
+      return { success: false, error: 'No valid artifacts returned from LLM analysis' };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to analyze position with LLM',
+      };
     }
   }
 

@@ -44,17 +44,31 @@ export class PassiveModeTask extends BaseRebalanceTask {
       console.log('⚠️  Telegram not configured, logging alert instead:');
       console.log('🚨 REBALANCE ALERT:');
       console.log(`   Position: ${evaluation.positionId}`);
-      console.log(`   Pool: ${evaluation.tokenPair} (${evaluation.poolAddress})`);
-      console.log(`   Chain: ${evaluation.chainId}`);
-      console.log(`   Reason: ${evaluation.reason}`);
+      console.log(`   Pool: ${evaluation.poolAddress}`);
       console.log(
-        `   Current range: $${evaluation.currentRange.priceRange[0].toFixed(6)} - $${evaluation.currentRange.priceRange[1].toFixed(6)}`
+        `   Reason: ${evaluation.recommendation?.reasoning || 'Position needs rebalancing'}`
       );
+
+      // Convert ticks to prices for display
+      const currentLowerPrice = Math.pow(1.0001, evaluation.currentRange.lower);
+      const currentUpperPrice = Math.pow(1.0001, evaluation.currentRange.upper);
       console.log(
-        `   Suggested range: $${evaluation.suggestedRange.priceRange[0].toFixed(6)} - $${evaluation.suggestedRange.priceRange[1].toFixed(6)}`
+        `   Current range: $${currentLowerPrice.toFixed(6)} - $${currentUpperPrice.toFixed(6)}`
       );
-      console.log(`   Est. APR improvement: +${evaluation.estimatedAprImprovement.toFixed(2)}%`);
-      console.log(`   Est. gas cost: $${evaluation.estimatedGasCost}`);
+
+      if (evaluation.recommendation?.newRange) {
+        const suggestedLowerPrice = Math.pow(1.0001, evaluation.recommendation.newRange.lower);
+        const suggestedUpperPrice = Math.pow(1.0001, evaluation.recommendation.newRange.upper);
+        console.log(
+          `   Suggested range: $${suggestedLowerPrice.toFixed(6)} - $${suggestedUpperPrice.toFixed(6)}`
+        );
+      }
+
+      console.log(`   Current price: $${evaluation.currentPrice.toFixed(6)}`);
+      console.log(`   Price deviation: ${(evaluation.priceDeviation * 100).toFixed(2)}%`);
+      console.log(
+        `   Confidence: ${evaluation.recommendation ? (evaluation.recommendation.confidence * 100).toFixed(1) + '%' : 'N/A'}`
+      );
       return;
     }
 
@@ -70,8 +84,11 @@ export class PassiveModeTask extends BaseRebalanceTask {
       console.error('❌ Failed to send Telegram alert:', error);
       // Fallback to console logging
       console.log('🚨 REBALANCE ALERT (Telegram failed):');
-      console.log(`   Pool: ${this.context.config.token0}/${this.context.config.token1}`);
-      console.log(`   Reason: ${evaluation.reason}`);
+      console.log(`   Position: ${evaluation.positionId}`);
+      console.log(`   Pool: ${evaluation.poolAddress}`);
+      console.log(
+        `   Reason: ${evaluation.recommendation?.reasoning || 'Position needs rebalancing'}`
+      );
     }
   }
 
@@ -81,27 +98,38 @@ export class PassiveModeTask extends BaseRebalanceTask {
   private formatTelegramMessage(evaluation: any): string {
     const timestamp = new Date().toLocaleString();
 
+    // Convert ticks to prices for display
+    const currentLowerPrice = Math.pow(1.0001, evaluation.currentRange.lower);
+    const currentUpperPrice = Math.pow(1.0001, evaluation.currentRange.upper);
+
+    const suggestedLowerPrice = evaluation.recommendation?.newRange
+      ? Math.pow(1.0001, evaluation.recommendation.newRange.lower)
+      : 0;
+    const suggestedUpperPrice = evaluation.recommendation?.newRange
+      ? Math.pow(1.0001, evaluation.recommendation.newRange.upper)
+      : 0;
+
     return `🚨 *LP Rebalance Alert*
     
-📊 *Position:* ${evaluation.tokenPair}
+📊 *Position:* ${evaluation.positionId}
 🆔 *ID:* \`${evaluation.positionId}\`
-🌐 *Chain:* ${evaluation.chainId}
 📍 *Pool:* \`${evaluation.poolAddress.slice(0, 10)}...\`
 ⏰ *Time:* ${timestamp}
 🔍 *Mode:* Passive (Alert Only)
 
-⚠️ *Reason:* ${evaluation.reason}
+⚠️ *Reason:* ${evaluation.recommendation?.reasoning || 'Position needs rebalancing'}
 
 📈 *Current Range:*
-$${evaluation.currentRange.priceRange[0].toFixed(6)} - $${evaluation.currentRange.priceRange[1].toFixed(6)}
+$${currentLowerPrice.toFixed(6)} - $${currentUpperPrice.toFixed(6)}
 
 🎯 *Suggested Range:*
-$${evaluation.suggestedRange.priceRange[0].toFixed(6)} - $${evaluation.suggestedRange.priceRange[1].toFixed(6)}
+$${suggestedLowerPrice.toFixed(6)} - $${suggestedUpperPrice.toFixed(6)}
 
-💰 *Expected Benefits:*
-• APR improvement: +${evaluation.estimatedAprImprovement.toFixed(2)}%
-• Gas cost: ~$${evaluation.estimatedGasCost}
-• Risk level: ${evaluation.riskAssessment}
+💰 *Analysis:*
+• Current Price: $${evaluation.currentPrice.toFixed(6)}
+• Price Deviation: ${(evaluation.priceDeviation * 100).toFixed(2)}%
+• In Range: ${evaluation.isInRange ? '✅' : '❌'}
+• Confidence: ${evaluation.recommendation ? (evaluation.recommendation.confidence * 100).toFixed(1) + '%' : 'N/A'}
 
 💡 *Next Steps:*
 Consider rebalancing your position to the suggested range for optimal returns.`;

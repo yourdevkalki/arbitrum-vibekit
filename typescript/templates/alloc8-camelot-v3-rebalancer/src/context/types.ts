@@ -12,6 +12,9 @@ export interface RebalancerContext {
   // MCP clients
   mcpClients: Record<string, Client>;
 
+  // LLM model
+  llm?: any;
+
   // Telegram bot (if configured)
   telegramBot?: TelegramBot;
 

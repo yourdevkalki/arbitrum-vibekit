@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineSkill } from 'arbitrum-vibekit-core';
+import { defineSkill, type HttpMcpConfig } from 'arbitrum-vibekit-core';
 import {
   getWalletLiquidityPositionsTool,
   fetchWalletPositionsTool,
@@ -9,6 +9,8 @@ import {
   supplyLiquidityTool,
   swapTokensTool,
   getWalletBalancesTool,
+  calculatePoolKPIsTool,
+  analyzePositionWithLLMTool,
 } from '../tools/index.js';
 
 // Input schema for the rebalancing skill
@@ -42,8 +44,14 @@ export const rebalancingSkill = defineSkill({
     'Show me all positions across all chains',
   ],
   inputSchema: rebalancingSkillInputSchema,
-  // No MCP servers needed - using direct GraphQL fetching for positions
-  // Other tools may still use MCP servers for market data and transactions
+  mcpServers: {
+    'ember-onchain': {
+      url: process.env.EMBER_MCP_SERVER_URL || 'https://api.emberai.xyz/mcp',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    } as HttpMcpConfig,
+  },
   tools: [
     getWalletLiquidityPositionsTool,
     fetchWalletPositionsTool,
@@ -53,6 +61,8 @@ export const rebalancingSkill = defineSkill({
     supplyLiquidityTool,
     swapTokensTool,
     getWalletBalancesTool,
+    calculatePoolKPIsTool,
+    analyzePositionWithLLMTool,
   ],
   // No manual handler - use LLM orchestration for flexible routing
 });

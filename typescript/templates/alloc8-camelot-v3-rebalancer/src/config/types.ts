@@ -199,21 +199,33 @@ export interface TokenMarketData {
  * Rebalance evaluation result
  */
 export interface RebalanceEvaluation {
+  positionId: string;
+  poolAddress: string;
+  currentPrice: number;
+  priceDeviation: number;
   needsRebalance: boolean;
-  reason: string;
   currentRange: {
-    tickLower: number;
-    tickUpper: number;
-    priceRange: [number, number];
+    lower: number;
+    upper: number;
   };
-  suggestedRange: {
-    tickLower: number;
-    tickUpper: number;
-    priceRange: [number, number];
+  isInRange: boolean;
+  liquidity: string;
+  fees: {
+    token0: string;
+    token1: string;
   };
-  estimatedAprImprovement: number;
-  estimatedGasCost: string;
-  riskAssessment: string;
+  recommendation?: {
+    action: string;
+    newRange: {
+      lower: number;
+      upper: number;
+    };
+    confidence: number;
+    reasoning: string;
+  };
+  kpis?: any;
+  llmAnalysis?: any;
+  timestamp: Date;
 }
 
 /**
