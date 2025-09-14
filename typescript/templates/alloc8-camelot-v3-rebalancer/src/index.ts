@@ -65,7 +65,8 @@ async function startAgent() {
   try {
     await agent.start(PORT, async deps => {
       // Pass the LLM model to the context provider
-      return contextProvider({ ...deps, llmModel: selectedProvider!(modelOverride) });
+      const llmModel = modelOverride ? selectedProvider!(modelOverride) : selectedProvider!();
+      return contextProvider({ ...deps, llmModel });
     });
 
     console.log('🔥 Camelot v3 LP Rebalancing Agent successfully started!');

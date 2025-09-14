@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { generateText } from 'ai';
 import type { VibkitToolDefinition } from 'arbitrum-vibekit-core';
 import { createSuccessTask, createErrorTask } from 'arbitrum-vibekit-core';
 import type { Task, Message } from '@google-a2a/types';
@@ -225,7 +226,7 @@ Focus on data-driven insights and provide specific, actionable recommendations.
 `;
 
       // Check if LLM is available
-      if (!context.llm || !context.llm.generateText) {
+      if (!context.llm) {
         console.warn('⚠️  LLM not available, using fallback analysis');
         const fallbackAnalysis = generateFallbackAnalysis(params, params.kpis);
         console.log('🔍 Fallback analysis result:', JSON.stringify(fallbackAnalysis, null, 2));
@@ -242,8 +243,8 @@ Focus on data-driven insights and provide specific, actionable recommendations.
       }
 
       // Use the LLM to analyze the position
-      const llmResponse = await context.llm.generateText({
-        model: 'gpt-4',
+      const llmResponse = await generateText({
+        model: context.llm,
         messages: [
           {
             role: 'system',
