@@ -29,7 +29,6 @@ const LIQUIDITY_QUERY = gql`
       totalValueLockedToken1
       totalValueLockedUSD
       liquidityProviderCount
-      feeZtO
       txCount
       ticks(first: 1000, orderBy: tickIdx, orderDirection: asc) {
         tickIdx
@@ -83,19 +82,34 @@ function calculateHourlyLPDashboard(
   positionRange: { lower: number; upper: number },
   tickSpacing: number = 1
 ) {
-  // Current tick calculation
-  const currentTick =
-    (Math.round(Math.log(currentPrice) / Math.log(1.0001)) / tickSpacing) * tickSpacing;
-
   // Liquidity metrics
-  const pool = liquidityData?.data?.pool || {};
+  const pool = (liquidityData as any)?.pool || {};
   const ticks = pool.ticks || [];
+
+  // Use current tick directly from subgraph data
+  const currentTick = parseInt(pool.tick || '0');
+
+  console.log(`🔍 Current tick from subgraph: ${pool.tick} (parsed: ${currentTick})`);
+
+  console.log(`🔍 Pool data analysis:`);
+  console.log(`   - Pool object keys:`, Object.keys(pool));
+  console.log(`   - Pool ticks count: ${ticks.length}`);
+  console.log(`   - Sample ticks:`, ticks.slice(0, 3));
+  console.log(
+    `   - Raw pool data structure:`,
+    JSON.stringify(pool, null, 2).substring(0, 500) + '...'
+  );
+
   const liquidityValues = ticks
     .filter((tick: any) => parseInt(tick.liquidityNet) !== 0)
     .map((tick: any) => Math.abs(parseInt(tick.liquidityNet)));
   const tickIndices = ticks
     .filter((tick: any) => parseInt(tick.liquidityNet) !== 0)
     .map((tick: any) => parseInt(tick.tickIdx));
+
+  console.log(`   - Filtered ticks count: ${liquidityValues.length}`);
+  console.log(`   - Sample liquidity values:`, liquidityValues.slice(0, 3));
+  console.log(`   - Sample tick indices:`, tickIndices.slice(0, 3));
 
   const totalLiquidity = liquidityValues.reduce((sum: number, val: number) => sum + val, 0);
 
@@ -106,6 +120,14 @@ function calculateHourlyLPDashboard(
     .reduce((sum: number, val: number) => sum + val, 0);
 
   const liquidityUtilization = totalLiquidity > 0 ? activeLiquidity / totalLiquidity : 0;
+
+  // Debug logging
+  console.log(`🔍 KPI Debug:`);
+  console.log(`   - Total liquidity: ${totalLiquidity}`);
+  console.log(`   - Active liquidity: ${activeLiquidity}`);
+  console.log(`   - Position range: [${lower}, ${upper}]`);
+  console.log(`   - Current tick: ${currentTick}`);
+  console.log(`   - Liquidity utilization: ${liquidityUtilization}`);
 
   // Concentration around current price (top 10% ticks)
   const numTicks = liquidityValues.length;
@@ -132,7 +154,7 @@ function calculateHourlyLPDashboard(
   const token1Ratio = totalTvl > 0 ? tvlToken1 / totalTvl : 0;
 
   // Price & volatility metrics
-  const poolHourData = priceData?.data?.pool?.poolHourData || [];
+  const poolHourData = priceData?.pool?.poolHourData || [];
   let token0Vol = 0;
   let token1Vol = 0;
   let priceChange = 0;
@@ -207,7 +229,7 @@ function calculateHourlyLPDashboard(
  * Calculate volume and fee analysis
  */
 function calculateVolumeFeeAnalysis(volumeData: any) {
-  const poolData = volumeData?.data?.pool || {};
+  const poolData = volumeData?.pool || {};
   const poolDayData = poolData.poolDayData || [];
 
   if (poolDayData.length === 0) {
@@ -231,9 +253,19 @@ function calculateVolumeFeeAnalysis(volumeData: any) {
     0
   );
   const avgFeeRate = totalVolume > 0 ? totalFees / totalVolume : 0;
-  const avgTvl = parseFloat(poolData.tvlUSD || '0');
-  const avgDailyVol = totalVolume / poolDayData.length;
-  const feeTier = parseFloat(poolData.feeZtO || '0') / 1e6;
+
+  // Fix avgTvl computation - aggregate over poolDayData
+  const totalTvl = poolDayData.reduce(
+    (sum: number, day: any) => sum + parseFloat(day.tvlUSD || '0'),
+    0
+  );
+  const avgTvl =
+    poolDayData.length > 0
+      ? totalTvl / poolDayData.length
+      : parseFloat(poolData.totalValueLockedUSD || '0');
+
+  const avgDailyVol = poolDayData.length > 0 ? totalVolume / poolDayData.length : 0;
+  const feeTier = 0; // Remove feeZtO reference
   const txnCount = parseInt(poolData.txCount || '0');
 
   return {
@@ -255,7 +287,7 @@ function calculateLPKPIs(
   topTicksPercent: number = 10,
   currentPriceTick?: number
 ) {
-  const pool = liquidityData?.data?.pool || {};
+  const pool = liquidityData?.pool || {};
   const ticks = pool.ticks || [];
   const liquidityValues = ticks
     .filter((tick: any) => parseInt(tick.liquidityNet) !== 0)
@@ -360,16 +392,57 @@ export const calculatePoolKPIsTool: VibkitToolDefinition<
       console.log(`🔍 Calculating KPIs for pool ${params.poolAddress}...`);
 
       // Fetch data from subgraph
+      console.log(`🔍 Fetching data for pool: ${params.poolAddress}`);
+
+      // Test with lowercase pool address
+      const poolId = params.poolAddress.toLowerCase();
+      console.log(`🔍 Using pool ID: ${poolId}`);
+
       const [liquidityData, priceData, volumeData] = await Promise.all([
-        request(CAMELOT_SUBGRAPH, LIQUIDITY_QUERY, { poolId: params.poolAddress }),
-        request(CAMELOT_SUBGRAPH, PRICE_HISTORY_QUERY, { poolId: params.poolAddress, days: 24 }),
-        request(CAMELOT_SUBGRAPH, VOLUME_QUERY, { poolId: params.poolAddress }),
+        request(CAMELOT_SUBGRAPH, LIQUIDITY_QUERY, { poolId }).catch(err => {
+          console.error('❌ Error fetching liquidity data:', err);
+          return { data: { pool: null } };
+        }),
+        request(CAMELOT_SUBGRAPH, PRICE_HISTORY_QUERY, { poolId, days: 24 }).catch(err => {
+          console.error('❌ Error fetching price data:', err);
+          return { data: { pool: null } };
+        }),
+        request(CAMELOT_SUBGRAPH, VOLUME_QUERY, { poolId }).catch(err => {
+          console.error('❌ Error fetching volume data:', err);
+          return { data: { pool: null } };
+        }),
       ]);
 
-      // Calculate current price tick
-      const currentPriceTick =
-        (Math.round(Math.log(params.currentPrice) / Math.log(1.0001)) / params.tickSpacing) *
-        params.tickSpacing;
+      // Debug: Check for GraphQL errors
+      if ((liquidityData as any)?.errors) {
+        console.error('❌ GraphQL errors in liquidity data:', (liquidityData as any).errors);
+      }
+      if ((priceData as any)?.errors) {
+        console.error('❌ GraphQL errors in price data:', (priceData as any).errors);
+      }
+      if ((volumeData as any)?.errors) {
+        console.error('❌ GraphQL errors in volume data:', (volumeData as any).errors);
+      }
+
+      // Use current tick directly from subgraph data
+      const pool = (liquidityData as any)?.pool || {};
+      const currentPriceTick = parseInt(pool.tick || '0');
+
+      console.log(`🔍 Current tick from subgraph: ${pool.tick} (parsed: ${currentPriceTick})`);
+
+      // Debug: Log raw data responses
+      console.log(`🔍 Raw liquidity data structure:`, {
+        hasData: !!liquidityData,
+        hasDataPool: !!(liquidityData as any)?.pool,
+        poolKeys: (liquidityData as any)?.pool ? Object.keys((liquidityData as any).pool) : [],
+        ticksCount: (liquidityData as any)?.pool?.ticks?.length || 0,
+      });
+
+      // Debug: Show the actual response structure
+      console.log(
+        `🔍 Full liquidity data response:`,
+        JSON.stringify(liquidityData, null, 2).substring(0, 1000) + '...'
+      );
 
       // Calculate all KPI categories
       const liquidityMetrics = calculateLPKPIs(liquidityData, 10, currentPriceTick);

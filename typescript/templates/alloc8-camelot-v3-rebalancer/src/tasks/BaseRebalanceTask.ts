@@ -219,7 +219,7 @@ export abstract class BaseRebalanceTask {
           const analysis = analysisResponse.data;
 
           // Calculate price deviation
-          const priceDeviation = this.calculatePriceDeviation(position, currentPrice);
+          const priceDeviation = await this.calculatePriceDeviation(position, currentPrice);
 
           // Check if rebalancing is needed based on LLM analysis
           const needsRebalance =
@@ -306,22 +306,22 @@ export abstract class BaseRebalanceTask {
   /**
    * Calculate price deviation from position range
    */
-  protected calculatePriceDeviation(position: PoolPosition, currentPrice: number): number {
-    // Convert ticks to prices
-    const lowerPrice = Math.pow(1.0001, position.tickLower);
-    const upperPrice = Math.pow(1.0001, position.tickUpper);
-    const rangeCenter = (lowerPrice + upperPrice) / 2;
-    const rangeWidth = upperPrice - lowerPrice;
+  protected async calculatePriceDeviation(
+    position: EnhancedPoolPosition,
+    currentPrice: number
+  ): Promise<number> {
+    // Import price calculation utilities
+    const { calculatePriceDeviation, tickToPrice } = await import('../utils/priceCalculations.js');
 
-    // Calculate deviation as percentage of range width
-    // If range width is very small, use a different approach
-    if (rangeWidth < 0.001) {
-      // For very tight ranges, calculate deviation as percentage of current price
-      return Math.abs(currentPrice - rangeCenter) / currentPrice;
-    }
+    // Convert ticks to prices using proper calculation
+    const token0Decimals = position.token0Decimals || 18;
+    const token1Decimals = position.token1Decimals || 6;
 
-    const deviation = Math.abs(currentPrice - rangeCenter) / (rangeWidth / 2);
-    return Math.min(deviation, 10); // Cap at 1000% to avoid astronomical values
+    const lowerPrice = tickToPrice(position.tickLower, token0Decimals, token1Decimals);
+    const upperPrice = tickToPrice(position.tickUpper, token0Decimals, token1Decimals);
+
+    // Calculate deviation using utility function
+    return calculatePriceDeviation(currentPrice, lowerPrice, upperPrice);
   }
 
   /**
@@ -375,7 +375,7 @@ export abstract class BaseRebalanceTask {
   /**
    * Analyze position with LLM using the analysis tool
    */
-  protected async analyzePositionWithLLM(position: PoolPosition, kpis: any) {
+  protected async analyzePositionWithLLM(position: EnhancedPoolPosition, kpis: any) {
     try {
       // Import the LLM analysis tool
       const { analyzePositionWithLLMTool } = await import('../tools/analyzePositionWithLLM.js');
@@ -387,6 +387,12 @@ export abstract class BaseRebalanceTask {
         llm: this.context.llm,
       };
 
+      // Get current price from position data
+      const currentPrice = parseFloat(position.currentPrice || '0');
+      const token0Decimals = position.token0Decimals || 18;
+      const token1Decimals = position.token1Decimals || 6;
+      const tickSpacing = 1; // Default for Camelot v3
+
       // Execute the LLM analysis
       const result = await analyzePositionWithLLMTool.execute(
         {
@@ -396,6 +402,10 @@ export abstract class BaseRebalanceTask {
             lower: position.tickLower,
             upper: position.tickUpper,
           },
+          currentPrice: currentPrice,
+          token0Decimals: token0Decimals,
+          token1Decimals: token1Decimals,
+          tickSpacing: tickSpacing,
           kpis: kpis,
           riskProfile: this.context.config.riskProfile as 'conservative' | 'medium' | 'aggressive',
         },

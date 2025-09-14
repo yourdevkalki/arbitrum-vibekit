@@ -3,6 +3,7 @@ import type { VibkitToolDefinition } from 'arbitrum-vibekit-core';
 import { createSuccessTask, createErrorTask } from 'arbitrum-vibekit-core';
 import type { Task, Message } from '@google-a2a/types';
 import type { RebalancerContext } from '../context/types.js';
+import { calculateNewTickRange } from '../utils/priceCalculations.js';
 
 const analyzePositionWithLLMParametersSchema = z.object({
   positionId: z.string().describe('Position ID to analyze'),
@@ -13,6 +14,10 @@ const analyzePositionWithLLMParametersSchema = z.object({
       upper: z.number().describe('Current upper tick'),
     })
     .describe('Current position range'),
+  currentPrice: z.number().describe('Current token price'),
+  token0Decimals: z.number().describe('Token0 decimals'),
+  token1Decimals: z.number().describe('Token1 decimals'),
+  tickSpacing: z.number().describe('Pool tick spacing'),
   kpis: z
     .object({
       liquidity_metrics: z.record(z.any()).describe('Liquidity distribution metrics'),
@@ -31,7 +36,16 @@ type AnalyzePositionWithLLMParams = z.infer<typeof analyzePositionWithLLMParamet
  * Generate fallback analysis when LLM is not available
  */
 function generateFallbackAnalysis(params: AnalyzePositionWithLLMParams, kpis: any) {
-  const { positionId, poolAddress, currentRange, riskProfile } = params;
+  const {
+    positionId,
+    poolAddress,
+    currentRange,
+    currentPrice,
+    token0Decimals,
+    token1Decimals,
+    tickSpacing,
+    riskProfile,
+  } = params;
   const { price_metrics, liquidity_metrics } = kpis;
 
   // Simple heuristic-based analysis
@@ -69,35 +83,21 @@ function generateFallbackAnalysis(params: AnalyzePositionWithLLMParams, kpis: an
   // Generate recommendation based on heuristics
   let action = 'maintain';
   let confidence = 0.5;
-  let newRange = {
-    lower_tick: currentRange.lower,
-    upper_tick: currentRange.upper,
-    range_width_pct: 0,
-  };
+  let newRange = currentRange;
 
   if (positionHealth === 'poor' || liquidityUtilization < 20) {
     action = 'rebalance';
     confidence = 0.7;
 
-    // Calculate new range based on risk profile
-    const rangeWidth = currentRange.upper - currentRange.lower;
-    const center = (currentRange.upper + currentRange.lower) / 2;
-
-    let newWidth = rangeWidth;
-    if (riskProfile === 'conservative') {
-      newWidth = rangeWidth * 0.8; // Narrower range
-    } else if (riskProfile === 'aggressive') {
-      newWidth = rangeWidth * 1.2; // Wider range
-    }
-
-    const newLower = Math.round(center - newWidth / 2);
-    const newUpper = Math.round(center + newWidth / 2);
-
-    newRange = {
-      lower_tick: newLower,
-      upper_tick: newUpper,
-      range_width_pct: Math.abs(newWidth / center) * 100,
-    };
+    // Calculate new range using proper price calculations
+    newRange = calculateNewTickRange(
+      currentPrice,
+      volatility,
+      riskProfile,
+      token0Decimals,
+      token1Decimals,
+      tickSpacing
+    );
   }
 
   return {
@@ -228,6 +228,7 @@ Focus on data-driven insights and provide specific, actionable recommendations.
       if (!context.llm || !context.llm.generateText) {
         console.warn('⚠️  LLM not available, using fallback analysis');
         const fallbackAnalysis = generateFallbackAnalysis(params, params.kpis);
+        console.log('🔍 Fallback analysis result:', JSON.stringify(fallbackAnalysis, null, 2));
         return createSuccessTask(
           'analyzePositionWithLLM',
           [
@@ -261,15 +262,18 @@ Focus on data-driven insights and provide specific, actionable recommendations.
       // Parse LLM response
       let analysisResult;
       try {
+        console.log('🤖 LLM response:', llmResponse.text);
         // Extract JSON from LLM response
         const jsonMatch = llmResponse.text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           analysisResult = JSON.parse(jsonMatch[0]);
+          console.log('🔍 Parsed LLM analysis:', JSON.stringify(analysisResult, null, 2));
         } else {
           throw new Error('No JSON found in LLM response');
         }
       } catch (parseError) {
         console.warn('Failed to parse LLM response as JSON, using fallback analysis');
+        console.log('Parse error:', parseError);
         analysisResult = {
           analysis: {
             position_health: 'fair',

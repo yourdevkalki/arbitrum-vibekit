@@ -174,7 +174,7 @@ export function calculateExpectedFees(
   const fee = poolState.fee / 1000000; // Convert from basis points
 
   // Estimate range coverage (what percentage of trades occur in this range)
-  const currentTick = Math.log(parseFloat(poolState.price)) / Math.log(1.0001);
+  const currentTick = poolState.tick;
   const tickRange = tickUpper - tickLower;
   const rangeCoverage = Math.min(1, 200 / tickRange); // Assume optimal range covers ~200 ticks
 

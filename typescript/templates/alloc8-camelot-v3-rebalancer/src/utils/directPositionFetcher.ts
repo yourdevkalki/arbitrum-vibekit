@@ -1,5 +1,12 @@
 import { request, gql } from 'graphql-request';
 import type { PoolPosition } from '../config/types.js';
+import {
+  calculatePriceRange,
+  calculatePriceDeviation,
+  isInRange as checkInRange,
+  calculateUtilizationRate,
+  tickToPrice,
+} from './priceCalculations.js';
 
 const CAMELOT_SUBGRAPH =
   'https://gateway.thegraph.com/api/90ca121632d0fb4cf804c4d6ffdf3cb5/subgraphs/id/3utanEBA9nqMjPnuQP1vMCCys6enSM3EawBpKTVwnUw2';
@@ -59,6 +66,7 @@ export interface EnhancedPoolPosition extends PoolPosition {
     token0: string;
     token1: string;
   };
+  currentTick?: number;
 }
 
 // -------------------- GraphQL Query --------------------
@@ -137,26 +145,24 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
       const tickLower = parseInt(mint.tickLower);
       const tickUpper = parseInt(mint.tickUpper);
       const currentTick = parseInt(pool.tick);
+      const token0Decimals = parseInt(pool.token0.decimals);
+      const token1Decimals = parseInt(pool.token1.decimals);
 
-      const priceRange = {
-        lower: Math.pow(1.0001, tickLower),
-        upper: Math.pow(1.0001, tickUpper),
-      };
+      // Calculate proper price range using the utility function
+      const priceRange = calculatePriceRange(tickLower, tickUpper, token0Decimals, token1Decimals);
 
-      // Calculate utilization rate (how close current price is to range bounds)
-      const tickRange = tickUpper - tickLower;
-      const tickFromLower = currentTick - tickLower;
-      const utilizationRate = tickRange > 0 ? tickFromLower / tickRange : 0;
+      // Calculate utilization rate using the utility function
+      const utilizationRate = calculateUtilizationRate(currentTick, tickLower, tickUpper);
 
-      // Determine if position is in range
-      const isInRange = currentTick >= tickLower && currentTick <= tickUpper;
+      // Determine if position is in range using the utility function
+      const positionInRange = checkInRange(currentTick, tickLower, tickUpper);
 
       // Calculate liquidity (simplified - in real implementation you'd need more complex calculation)
-      const liquidity = isInRange ? '1000000' : '0'; // Placeholder
+      const liquidity = positionInRange ? '1000000' : '0'; // Placeholder
 
       // Calculate amounts (simplified - in real implementation you'd need proper calculation)
-      const amount0 = isInRange ? '1000' : '0'; // Placeholder
-      const amount1 = isInRange ? '1000' : '0'; // Placeholder
+      const amount0 = positionInRange ? '1000' : '0'; // Placeholder
+      const amount1 = positionInRange ? '1000' : '0'; // Placeholder
 
       const enhancedPosition: EnhancedPoolPosition = {
         positionId: pos.id,
@@ -170,7 +176,7 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
         amount1,
         fees0: pool.feesToken0,
         fees1: pool.feesToken1,
-        isInRange,
+        isInRange: positionInRange,
         chainId: 42161, // Arbitrum
         token0Symbol: pool.token0.symbol,
         token1Symbol: pool.token1.symbol,
@@ -180,6 +186,7 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
         priceRange,
         utilizationRate,
         feesUSD: pool.feesUSD,
+        currentTick: currentTick,
         tvlUSD: {
           token0: pool.token0.totalValueLockedUSD,
           token1: pool.token1.totalValueLockedUSD,
