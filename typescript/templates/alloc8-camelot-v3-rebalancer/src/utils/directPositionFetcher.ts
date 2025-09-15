@@ -30,6 +30,7 @@ interface Pool {
   feesUSD: string;
   token0Price: string;
   token1Price: string;
+  tickSpacing: string;
 }
 
 interface MintOrBurn {
@@ -67,6 +68,7 @@ export interface EnhancedPoolPosition extends PoolPosition {
     token1: string;
   };
   currentTick?: number;
+  tickSpacing?: number;
 }
 
 // -------------------- GraphQL Query --------------------
@@ -96,6 +98,7 @@ const ACTIVE_POSITIONS_QUERY = gql`
         feesUSD
         token0Price
         token1Price
+        tickSpacing
       }
       transaction {
         mints {
@@ -187,6 +190,7 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
         utilizationRate,
         feesUSD: pool.feesUSD,
         currentTick: currentTick,
+        tickSpacing: parseInt(pool.tickSpacing),
         tvlUSD: {
           token0: pool.token0.totalValueLockedUSD,
           token1: pool.token1.totalValueLockedUSD,

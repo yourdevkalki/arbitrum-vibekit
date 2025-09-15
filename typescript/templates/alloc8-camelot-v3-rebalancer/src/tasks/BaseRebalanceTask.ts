@@ -17,7 +17,7 @@ import type {
 import { DiscoveryMode } from '../config/types.js';
 import type { EnhancedPoolPosition } from '../utils/directPositionFetcher.js';
 import { fetchActivePositions } from '../utils/directPositionFetcher.js';
-import { evaluateRebalanceNeed } from '../strategy/rangeCalculator.js';
+// import { evaluateRebalanceNeed } from '../strategy/rangeCalculator.js';
 
 export abstract class BaseRebalanceTask {
   public readonly id: string;
@@ -242,6 +242,13 @@ export abstract class BaseRebalanceTask {
               token0: position.fees0,
               token1: position.fees1,
             },
+            // Add token information for withdrawal operations
+            token0: position.token0,
+            token1: position.token1,
+            token0Symbol: position.token0Symbol || 'UNKNOWN',
+            token1Symbol: position.token1Symbol || 'UNKNOWN',
+            // Add position value information
+            tvlUSD: position.tvlUSD,
             recommendation: needsRebalance
               ? {
                   action: analysis.recommendation.action,

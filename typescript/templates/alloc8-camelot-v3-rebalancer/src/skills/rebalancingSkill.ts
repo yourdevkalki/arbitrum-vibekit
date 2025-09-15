@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineSkill, type HttpMcpConfig } from 'arbitrum-vibekit-core';
+import { defineSkill, type HttpMcpConfig, type StdioMcpConfig } from 'arbitrum-vibekit-core';
 import {
   getWalletLiquidityPositionsTool,
   fetchWalletPositionsTool,
@@ -45,6 +45,7 @@ export const rebalancingSkill = defineSkill({
   ],
   inputSchema: rebalancingSkillInputSchema,
   mcpServers: {
+    // Ember MCP server for data operations
     'ember-onchain': {
       url: process.env.EMBER_MCP_SERVER_URL || 'https://api.emberai.xyz/mcp',
       headers: {

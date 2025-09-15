@@ -67,7 +67,7 @@ export class ActiveModeTask extends BaseRebalanceTask {
 
       // Step 1: Withdraw current liquidity
       console.log('🔄 Step 1: Withdrawing current liquidity...');
-      const withdrawResult = await this.withdrawLiquidity(positionId);
+      const withdrawResult = await this.withdrawLiquidity(evaluation);
 
       if (!withdrawResult.success) {
         throw new Error(`Liquidity withdrawal failed: ${withdrawResult.error}`);
@@ -107,26 +107,43 @@ export class ActiveModeTask extends BaseRebalanceTask {
   /**
    * Withdraw liquidity from current position
    */
-  private async withdrawLiquidity(positionId: string): Promise<TransactionResult> {
-    const response = await this.context.mcpClients['ember-onchain']!.request(
+  private async withdrawLiquidity(evaluation: any): Promise<TransactionResult> {
+    // Import the withdrawLiquidity tool
+    const { withdrawLiquidityTool } = await import('../tools/withdrawLiquidity.js');
+
+    // Create AgentContext wrapper
+    const agentContext = {
+      custom: this.context,
+      config: this.context.config,
+      mcpClients: this.context.mcpClients,
+      llm: this.context.llm,
+    };
+
+    // Extract position data from evaluation
+    const positionId = evaluation.positionId;
+
+    console.log('🔍 Full evaluation data:', JSON.stringify(evaluation, null, 2));
+    console.log('🔍 Withdrawing liquidity for position:', positionId);
+
+    // Execute the tool with simplified parameters
+    const result = await withdrawLiquidityTool.execute(
       {
-        method: 'tools/call',
-        params: {
-          name: 'withdrawLiquidity',
-          arguments: {
-            positionId,
-            collectFees: true,
-          },
-        },
+        positionId,
+        collectFees: true,
       },
-      z.any()
+      agentContext
     );
 
-    if (!(response as any).result?.content) {
-      throw new Error('No response from withdraw liquidity');
+    if ('artifacts' in result && result.artifacts && result.artifacts.length > 0) {
+      const artifact = result.artifacts[0];
+      if (artifact && artifact.parts && artifact.parts.length > 0) {
+        const part = artifact.parts[0];
+        if (part && 'text' in part) {
+          return JSON.parse(part.text);
+        }
+      }
     }
-
-    return JSON.parse((response as any).result.content[0].text);
+    throw new Error('No valid artifacts returned from withdraw liquidity');
   }
 
   /**
@@ -142,28 +159,47 @@ export class ActiveModeTask extends BaseRebalanceTask {
    * Rebalance token ratio via swap
    */
   private async rebalanceTokenRatio(): Promise<void> {
+    // Import the required tools
+    const { getWalletBalancesTool, swapTokensTool } = await import('../tools/index.js');
+
+    // Create AgentContext wrapper
+    const agentContext = {
+      custom: this.context,
+      config: this.context.config,
+      mcpClients: this.context.mcpClients,
+      llm: this.context.llm,
+    };
+
     // Get wallet balances
     const walletAddress = getWalletAddressFromPrivateKey(this.context.config.walletPrivateKey);
 
-    const balancesResponse = await this.context.mcpClients['ember-onchain']!.request(
+    const balancesResult = await getWalletBalancesTool.execute(
       {
-        method: 'tools/call',
-        params: {
-          name: 'getWalletBalances',
-          arguments: {
-            walletAddress,
-            tokens: [this.context.config.token0, this.context.config.token1],
-          },
-        },
+        walletAddress,
+        tokens: [this.context.config.token0!, this.context.config.token1!],
       },
-      z.any()
+      agentContext
     );
 
-    if (!(balancesResponse as any).result?.content) {
+    if (
+      !('artifacts' in balancesResult) ||
+      !balancesResult.artifacts ||
+      balancesResult.artifacts.length === 0
+    ) {
       throw new Error('Failed to get wallet balances');
     }
 
-    const balances = JSON.parse((balancesResponse as any).result.content[0].text);
+    const artifact = balancesResult.artifacts[0];
+    if (!artifact || !artifact.parts || artifact.parts.length === 0) {
+      throw new Error('No valid artifacts returned from get wallet balances');
+    }
+
+    const part = artifact.parts[0];
+    if (!part || !('text' in part)) {
+      throw new Error('Invalid artifact format from get wallet balances');
+    }
+
+    const balances = JSON.parse(part.text);
 
     // Simplified swap logic - swap 10% of larger balance
     const token0Balance = balances.find((b: any) => b.symbol === this.context.config.token0);
@@ -173,28 +209,36 @@ export class ActiveModeTask extends BaseRebalanceTask {
       // Swap some token0 for token1
       const swapAmount = (parseFloat(token0Balance.balanceFormatted) * 0.1).toString();
 
-      const swapResponse = await this.context.mcpClients['ember-onchain']!.request(
+      const swapResult = await swapTokensTool.execute(
         {
-          method: 'tools/call',
-          params: {
-            name: 'swapTokens',
-            arguments: {
-              tokenIn: this.context.config.token0,
-              tokenOut: this.context.config.token1,
-              amountIn: swapAmount,
-            },
-          },
+          tokenIn: this.context.config.token0!,
+          tokenOut: this.context.config.token1!,
+          amountIn: swapAmount,
         },
-        z.any()
+        agentContext
       );
 
-      if (!(swapResponse as any).result?.content) {
+      if (
+        !('artifacts' in swapResult) ||
+        !swapResult.artifacts ||
+        swapResult.artifacts.length === 0
+      ) {
         throw new Error('Token swap failed');
       }
 
-      const swapResult = JSON.parse((swapResponse as any).result.content[0].text);
-      if (!swapResult.success) {
-        throw new Error(`Token swap failed: ${swapResult.error}`);
+      const swapArtifact = swapResult.artifacts[0];
+      if (!swapArtifact || !swapArtifact.parts || swapArtifact.parts.length === 0) {
+        throw new Error('No valid artifacts returned from token swap');
+      }
+
+      const swapPart = swapArtifact.parts[0];
+      if (!swapPart || !('text' in swapPart)) {
+        throw new Error('Invalid artifact format from token swap');
+      }
+
+      const swapData = JSON.parse(swapPart.text);
+      if (!swapData.success) {
+        throw new Error(`Token swap failed: ${swapData.error}`);
       }
     }
   }
@@ -207,58 +251,160 @@ export class ActiveModeTask extends BaseRebalanceTask {
     poolAddress: string,
     chainId: number
   ): Promise<TransactionResult> {
+    // Import the required tools
+    const { getWalletBalancesTool, supplyLiquidityTool } = await import('../tools/index.js');
+
+    // Create AgentContext wrapper
+    const agentContext = {
+      custom: this.context,
+      config: this.context.config,
+      mcpClients: this.context.mcpClients,
+      llm: this.context.llm,
+    };
+
     // Get current wallet balances to determine amounts
     const walletAddress = getWalletAddressFromPrivateKey(this.context.config.walletPrivateKey);
 
-    const balancesResponse = await this.context.mcpClients['ember-onchain']!.request(
+    // Extract token symbols and addresses from evaluation data
+    const token0 = evaluation.token0Symbol || evaluation.symbol0;
+    const token1 = evaluation.token1Symbol || evaluation.symbol1;
+    const token0Id = evaluation.token0; // Direct address from evaluation
+    const token1Id = evaluation.token1; // Direct address from evaluation
+
+    console.log('🔍 Full evaluation data for supply:', JSON.stringify(evaluation, null, 2));
+    console.log('🔍 Supplying liquidity with position data:', {
+      token0,
+      token1,
+      token0Id,
+      token1Id,
+      poolAddress,
+    });
+
+    // Validate required token addresses - must come from the position being rebalanced
+    if (!token0Id || !token1Id) {
+      throw new Error(
+        `Missing token addresses from position data: token0Id=${token0Id}, token1Id=${token1Id}. ` +
+          `Cannot rebalance position without knowing the original token addresses. ` +
+          `This position may have invalid or missing token data.`
+      );
+    }
+
+    const balancesResult = await getWalletBalancesTool.execute(
       {
-        method: 'tools/call',
-        params: {
-          name: 'getWalletBalances',
-          arguments: {
-            walletAddress,
-            tokens: [this.context.config.token0, this.context.config.token1],
-          },
-        },
+        walletAddress,
+        tokens: [token0, token1],
       },
-      z.any()
+      agentContext
     );
 
-    if (!(balancesResponse as any).result?.content) {
+    if (
+      !('artifacts' in balancesResult) ||
+      !balancesResult.artifacts ||
+      balancesResult.artifacts.length === 0
+    ) {
       throw new Error('Failed to get wallet balances');
     }
 
-    const balances = JSON.parse((balancesResponse as any).result.content[0].text);
-    const token0Balance = balances.find((b: any) => b.symbol === this.context.config.token0);
-    const token1Balance = balances.find((b: any) => b.symbol === this.context.config.token1);
+    const artifact = balancesResult.artifacts[0];
+    if (!artifact || !artifact.parts || artifact.parts.length === 0) {
+      throw new Error('No valid artifacts returned from get wallet balances');
+    }
+
+    const part = artifact.parts[0];
+    if (!part || !('text' in part)) {
+      throw new Error('Invalid artifact format from get wallet balances');
+    }
+
+    const balanceData = JSON.parse(part.text);
+    const balances = balanceData.balances || [];
+    const token0Balance = balances.find((b: any) => b.symbol === token0);
+    const token1Balance = balances.find((b: any) => b.symbol === token1);
+
+    if (!token0Balance) {
+      throw new Error(`Token ${token0} balance not found in wallet`);
+    }
+    if (!token1Balance) {
+      throw new Error(`Token ${token1} balance not found in wallet`);
+    }
+
+    // Calculate the value of the old position to match it
+    const currentPrice = evaluation.currentPrice;
+
+    // Use TVL data from the old position as reference
+    const oldPositionValue = evaluation.tvlUSD
+      ? parseFloat(evaluation.tvlUSD.token0) + parseFloat(evaluation.tvlUSD.token1)
+      : null;
+
+    // Calculate current wallet value
+    const token0Value = parseFloat(token0Balance.balanceFormatted) * currentPrice;
+    const token1Value = parseFloat(token1Balance.balanceFormatted);
+    const currentWalletValue = token0Value + token1Value;
+
+    console.log(`💰 Position value analysis:`);
+    console.log(
+      `   Old position value (TVL): $${oldPositionValue ? oldPositionValue.toFixed(2) : 'Unknown'}`
+    );
+    console.log(`   Current wallet value: $${currentWalletValue.toFixed(2)}`);
+    console.log(
+      `   ${token0}: ${token0Balance.balanceFormatted} * $${currentPrice} = $${token0Value.toFixed(2)}`
+    );
+    console.log(`   ${token1}: ${token1Balance.balanceFormatted} = $${token1Value.toFixed(2)}`);
+
+    if (oldPositionValue) {
+      const valueDifference = currentWalletValue - oldPositionValue;
+      console.log(
+        `   Value difference: $${valueDifference.toFixed(2)} (${((valueDifference / oldPositionValue) * 100).toFixed(1)}%)`
+      );
+    }
 
     // Use 95% of available balances (keep 5% for gas and slippage)
-    const amount0Desired = (parseFloat(token0Balance.balance) * 0.95).toString();
-    const amount1Desired = (parseFloat(token1Balance.balance) * 0.95).toString();
+    // This ensures we create a position of similar value to the old one
+    const amount0Desired = (parseFloat(token0Balance.balanceFormatted) * 0.95).toString();
+    const amount1Desired = (parseFloat(token1Balance.balanceFormatted) * 0.95).toString();
 
-    const response = await this.context.mcpClients['ember-onchain']!.request(
-      {
-        method: 'tools/call',
-        params: {
-          name: 'supplyLiquidity',
-          arguments: {
-            poolAddress,
-            chainId,
-            tickLower: evaluation.suggestedRange.tickLower,
-            tickUpper: evaluation.suggestedRange.tickUpper,
-            amount0Desired,
-            amount1Desired,
-          },
-        },
-      },
-      z.any()
+    console.log(`🔄 Creating new position with:`);
+    console.log(
+      `   ${token0}: ${amount0Desired} (${(parseFloat(amount0Desired) * currentPrice).toFixed(2)} USD)`
+    );
+    console.log(`   ${token1}: ${amount1Desired} (${parseFloat(amount1Desired).toFixed(2)} USD)`);
+    console.log(
+      `   New position value: $${(parseFloat(amount0Desired) * currentPrice + parseFloat(amount1Desired)).toFixed(2)}`
     );
 
-    if (!(response as any).result?.content) {
+    const supplyResult = await supplyLiquidityTool.execute(
+      {
+        token0: token0Id,
+        token1: token1Id,
+        tickLower:
+          evaluation.recommendation?.newRange?.lower || evaluation.suggestedRange?.tickLower,
+        tickUpper:
+          evaluation.recommendation?.newRange?.upper || evaluation.suggestedRange?.tickUpper,
+        amount0Desired,
+        amount1Desired,
+        slippageBps: 200, // 2% slippage (increased from 0.5% to handle market volatility)
+      },
+      agentContext
+    );
+
+    if (
+      !('artifacts' in supplyResult) ||
+      !supplyResult.artifacts ||
+      supplyResult.artifacts.length === 0
+    ) {
       throw new Error('No response from supply liquidity');
     }
 
-    return JSON.parse((response as any).result.content[0].text);
+    const supplyArtifact = supplyResult.artifacts[0];
+    if (!supplyArtifact || !supplyArtifact.parts || supplyArtifact.parts.length === 0) {
+      throw new Error('No valid artifacts returned from supply liquidity');
+    }
+
+    const supplyPart = supplyArtifact.parts[0];
+    if (!supplyPart || !('text' in supplyPart)) {
+      throw new Error('Invalid artifact format from supply liquidity');
+    }
+
+    return JSON.parse(supplyPart.text);
   }
 
   /**

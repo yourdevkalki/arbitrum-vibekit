@@ -1,9 +1,14 @@
 import { z } from 'zod';
 import type { VibkitToolDefinition } from 'arbitrum-vibekit-core';
-import { createSuccessTask, createErrorTask } from 'arbitrum-vibekit-core';
+import {
+  createSuccessTask,
+  createErrorTask,
+  parseMcpToolResponseText,
+} from 'arbitrum-vibekit-core';
 import type { Task, Message } from '@google-a2a/types';
 import type { RebalancerContext } from '../context/types.js';
 import type { TransactionResult } from '../config/types.js';
+import { SwapTokensResponseSchema } from 'ember-api';
 
 const swapTokensParametersSchema = z.object({
   tokenIn: z.string().describe('Token to swap from (symbol or address)'),
@@ -34,52 +39,14 @@ export const swapTokensTool: VibkitToolDefinition<
     try {
       console.log(`🔄 Swapping ${params.amountIn} ${params.tokenIn} for ${params.tokenOut}`);
 
-      // Calculate default deadline if not provided
-      const deadline = params.deadline || Math.floor(Date.now() / 1000) + 1200; // 20 minutes
+      // Get wallet address from private key
+      const { getWalletAddressFromPrivateKey } = await import('../utils/walletUtils.js');
+      const walletAddress = getWalletAddressFromPrivateKey(context.config.walletPrivateKey);
 
-      // Call Ember MCP server to swap tokens
-      const response = await context.mcpClients['ember-onchain'].request(
-        {
-          method: 'tools/call',
-          params: {
-            name: 'swapTokens',
-            arguments: {
-              tokenIn: params.tokenIn,
-              tokenOut: params.tokenOut,
-              amountIn: params.amountIn,
-              amountOutMinimum: params.amountOutMinimum,
-              deadline,
-              protocol: 'camelot',
-              privateKey: context.config.walletPrivateKey,
-            },
-          },
-        },
-        {}
-      );
-
-      if (!response.result || !response.result.content) {
-        throw new Error('No response from MCP server');
-      }
-
-      const result: TransactionResult = JSON.parse(response.result.content[0].text);
-
-      if (result.success) {
-        console.log(`✅ Token swap completed successfully`);
-        console.log(`   Transaction: ${result.transactionHash}`);
-        console.log(`   Gas used: ${result.gasUsed}`);
-      } else {
-        console.error(`❌ Token swap failed: ${result.error}`);
-      }
-
-      return createSuccessTask(
-        'swapTokens',
-        [
-          {
-            artifactId: 'swapTokens-' + Date.now(),
-            parts: [{ kind: 'text', text: JSON.stringify(result) }],
-          },
-        ],
-        'Operation completed successfully'
+      // Note: Ember MCP server doesn't have a direct swap tool
+      // This would need to be implemented using a different approach
+      throw new Error(
+        'Swap functionality not available through Ember MCP server. Please use a different DEX integration.'
       );
     } catch (error) {
       console.error('❌ Error swapping tokens:', error);

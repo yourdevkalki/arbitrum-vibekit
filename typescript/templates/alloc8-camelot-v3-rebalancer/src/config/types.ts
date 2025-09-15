@@ -214,6 +214,16 @@ export interface RebalanceEvaluation {
     token0: string;
     token1: string;
   };
+  // Token information for withdrawal operations
+  token0: string;
+  token1: string;
+  token0Symbol: string;
+  token1Symbol: string;
+  // Position value information
+  tvlUSD?: {
+    token0: string;
+    token1: string;
+  };
   recommendation?: {
     action: string;
     newRange: {

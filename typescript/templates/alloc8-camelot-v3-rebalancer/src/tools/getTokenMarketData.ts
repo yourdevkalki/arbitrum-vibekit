@@ -33,46 +33,10 @@ export const getTokenMarketDataTool: VibkitToolDefinition<
     try {
       console.log(`🔍 Getting market data for tokens: ${params.tokens.join(', ')}`);
 
-      // Call Ember MCP server to get token market data
-      const response = await context.mcpClients['ember-onchain'].request(
-        {
-          method: 'tools/call',
-          params: {
-            name: 'getTokenMarketData',
-            arguments: {
-              tokens: params.tokens,
-              includeVolatility: params.includeVolatility,
-              chain: 'arbitrum',
-            },
-          },
-        },
-        {}
-      );
-
-      if (!response.result || !response.result.content) {
-        throw new Error('No response from MCP server');
-      }
-
-      const marketData: TokenMarketData[] = JSON.parse(response.result.content[0].text);
-
-      console.log('✅ Retrieved market data:');
-      marketData.forEach(data => {
-        console.log(
-          `   ${data.symbol}: $${data.price.toFixed(6)} (${data.priceChange24h > 0 ? '+' : ''}${data.priceChange24h.toFixed(2)}%)`
-        );
-        console.log(`     Volume 24h: $${data.volume24h.toLocaleString()}`);
-        console.log(`     Volatility: ${(data.volatility * 100).toFixed(2)}%`);
-      });
-
-      return createSuccessTask(
-        'getTokenMarketData',
-        [
-          {
-            artifactId: 'getTokenMarketData-' + Date.now(),
-            parts: [{ kind: 'text', text: JSON.stringify(marketData) }],
-          },
-        ],
-        'Operation completed successfully'
+      // Note: Ember MCP server doesn't have a direct getTokenMarketData tool
+      // This would need to be implemented using a different approach
+      throw new Error(
+        'Token market data functionality not available through Ember MCP server. Please use a different integration.'
       );
     } catch (error) {
       console.error('❌ Error getting token market data:', error);

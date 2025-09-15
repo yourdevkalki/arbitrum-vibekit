@@ -10,6 +10,7 @@ import type {
   RiskProfileSettings,
   RebalanceEvaluation,
 } from '../config/types.js';
+import type { EnhancedPoolPosition } from '../utils/directPositionFetcher.js';
 import { RISK_PROFILES } from '../config/types.js';
 import {
   calculateVolatility,
@@ -58,7 +59,7 @@ export function calculateOptimalRange(
  * Evaluate if a position needs rebalancing
  */
 export function evaluateRebalanceNeed(
-  position: PoolPosition,
+  position: EnhancedPoolPosition,
   poolState: PoolState,
   token0Data: TokenMarketData,
   token1Data: TokenMarketData,
@@ -114,21 +115,27 @@ export function evaluateRebalanceNeed(
   else if (priceDeviation > 0.1) riskAssessment = 'Medium';
 
   return {
+    positionId: position.positionId,
+    poolAddress: position.poolAddress,
+    currentPrice: parseFloat(poolState.price),
+    priceDeviation,
     needsRebalance,
-    reason,
     currentRange: {
-      tickLower: position.tickLower,
-      tickUpper: position.tickUpper,
-      priceRange: [currentRange.priceLower, currentRange.priceUpper],
+      lower: position.tickLower,
+      upper: position.tickUpper,
     },
-    suggestedRange: {
-      tickLower: optimalRange.tickLower,
-      tickUpper: optimalRange.tickUpper,
-      priceRange: optimalRange.priceRange,
+    isInRange: position.isInRange,
+    liquidity: position.liquidity,
+    fees: {
+      token0: position.fees0,
+      token1: position.fees1,
     },
-    estimatedAprImprovement: Math.max(0, aprImprovement),
-    estimatedGasCost,
-    riskAssessment,
+    // Add token information for withdrawal operations
+    token0: position.token0,
+    token1: position.token1,
+    token0Symbol: position.token0Symbol || 'UNKNOWN',
+    token1Symbol: position.token1Symbol || 'UNKNOWN',
+    timestamp: new Date(),
   };
 }
 
