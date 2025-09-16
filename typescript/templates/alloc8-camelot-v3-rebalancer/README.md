@@ -156,6 +156,9 @@ AI_MODEL=gpt-4
 # Wallet
 WALLET_PRIVATE_KEY=your_wallet_private_key_here
 
+# Subgraph Configuration (required)
+SUBRAPH_API_KEY=your_subgraph_api_key_here
+
 # Discovery Mode
 DISCOVERY_MODE=auto-discover    # or single-pool
 ```
@@ -175,6 +178,10 @@ TELEGRAM_CHAT_ID=your_chat_id
 # Thresholds
 PRICE_DEVIATION_THRESHOLD=0.05    # 5%
 UTILIZATION_THRESHOLD=0.8         # 80%
+
+# Subgraph API Key (required)
+# Get your API key from: https://thegraph.com/studio/
+SUBRAPH_API_KEY=your_subgraph_api_key_here
 ```
 
 ### Risk Profiles

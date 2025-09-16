@@ -4,6 +4,7 @@ import { createSuccessTask, createErrorTask } from 'arbitrum-vibekit-core';
 import type { Task, Message } from '@google-a2a/types';
 import type { RebalancerContext } from '../context/types.js';
 import { request, gql } from 'graphql-request';
+import { loadAgentConfig } from '../config/index.js';
 
 const calculatePoolKPIsParametersSchema = z.object({
   poolAddress: z.string().describe('Pool address to calculate KPIs for'),
@@ -69,8 +70,15 @@ const VOLUME_QUERY = gql`
   }
 `;
 
-const CAMELOT_SUBGRAPH =
-  'https://gateway.thegraph.com/api/90ca121632d0fb4cf804c4d6ffdf3cb5/subgraphs/id/3utanEBA9nqMjPnuQP1vMCCys6enSM3EawBpKTVwnUw2';
+// Get subgraph URL from environment variable
+function getSubgraphUrl(): string {
+  const config = loadAgentConfig();
+  const apiKey = config.subgraphApiKey;
+  if (!apiKey) {
+    throw new Error('SUBRAPH_API_KEY environment variable is required');
+  }
+  return `https://gateway.thegraph.com/api/${apiKey}/subgraphs/id/3utanEBA9nqMjPnuQP1vMCCys6enSM3EawBpKTVwnUw2`;
+}
 
 /**
  * Calculate hourly LP dashboard KPIs
@@ -95,10 +103,7 @@ function calculateHourlyLPDashboard(
   console.log(`   - Pool object keys:`, Object.keys(pool));
   console.log(`   - Pool ticks count: ${ticks.length}`);
   console.log(`   - Sample ticks:`, ticks.slice(0, 3));
-  console.log(
-    `   - Raw pool data structure:`,
-    JSON.stringify(pool, null, 2).substring(0, 500) + '...'
-  );
+  
 
   const liquidityValues = ticks
     .filter((tick: any) => parseInt(tick.liquidityNet) !== 0)
@@ -399,15 +404,15 @@ export const calculatePoolKPIsTool: VibkitToolDefinition<
       console.log(`🔍 Using pool ID: ${poolId}`);
 
       const [liquidityData, priceData, volumeData] = await Promise.all([
-        request(CAMELOT_SUBGRAPH, LIQUIDITY_QUERY, { poolId }).catch(err => {
+        request(getSubgraphUrl(), LIQUIDITY_QUERY, { poolId }).catch(err => {
           console.error('❌ Error fetching liquidity data:', err);
           return { data: { pool: null } };
         }),
-        request(CAMELOT_SUBGRAPH, PRICE_HISTORY_QUERY, { poolId, days: 24 }).catch(err => {
+        request(getSubgraphUrl(), PRICE_HISTORY_QUERY, { poolId, days: 24 }).catch(err => {
           console.error('❌ Error fetching price data:', err);
           return { data: { pool: null } };
         }),
-        request(CAMELOT_SUBGRAPH, VOLUME_QUERY, { poolId }).catch(err => {
+        request(getSubgraphUrl(), VOLUME_QUERY, { poolId }).catch(err => {
           console.error('❌ Error fetching volume data:', err);
           return { data: { pool: null } };
         }),

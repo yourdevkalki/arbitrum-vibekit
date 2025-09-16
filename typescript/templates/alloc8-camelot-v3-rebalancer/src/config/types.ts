@@ -89,6 +89,9 @@ export const AgentConfigSchema = z
 
     // MCP server configuration
     emberMcpServerUrl: z.string().url().default('https://api.emberai.xyz/mcp'),
+
+    // Subgraph configuration
+    subgraphApiKey: z.string().describe('The Graph API key for subgraph access'),
   })
   .refine(
     data => {

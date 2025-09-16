@@ -30,6 +30,7 @@ export function loadAgentConfig(): AgentConfig {
     telegramChatId: process.env.TELEGRAM_CHAT_ID,
     arbitrumRpcUrl: process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
     emberMcpServerUrl: process.env.EMBER_MCP_SERVER_URL || 'https://api.emberai.xyz/mcp',
+    subgraphApiKey: process.env.SUBGRAPH_API_KEY,
   };
 
   const result = AgentConfigSchema.safeParse(config);

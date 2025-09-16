@@ -7,9 +7,18 @@ import {
   calculateUtilizationRate,
   tickToPrice,
 } from './priceCalculations.js';
+import { loadAgentConfig } from '../config/index.js';
 
-const CAMELOT_SUBGRAPH =
-  'https://gateway.thegraph.com/api/90ca121632d0fb4cf804c4d6ffdf3cb5/subgraphs/id/3utanEBA9nqMjPnuQP1vMCCys6enSM3EawBpKTVwnUw2';
+// Get subgraph URL from environment variable
+function getSubgraphUrl(): string {
+  const config = loadAgentConfig();
+  const apiKey = config.subgraphApiKey;
+  console.log('🔍 Subgraph API Key:', apiKey);
+  if (!apiKey) {
+    throw new Error('SUBRAPH_API_KEY environment variable is required');
+  }
+  return `https://gateway.thegraph.com/api/${apiKey}/subgraphs/id/3utanEBA9nqMjPnuQP1vMCCys6enSM3EawBpKTVwnUw2`;
+}
 
 // -------------------- Type Definitions --------------------
 interface Token {
@@ -130,7 +139,7 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
     console.log(`🔍 Fetching positions from Camelot v3 subgraph for wallet: ${wallet}`);
 
     const data = await request<{ positions: RawPosition[] }>(
-      CAMELOT_SUBGRAPH,
+      getSubgraphUrl(),
       ACTIVE_POSITIONS_QUERY,
       { wallet: wallet.toLowerCase() }
     );
