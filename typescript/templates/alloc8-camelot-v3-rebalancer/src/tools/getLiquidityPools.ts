@@ -26,32 +26,35 @@ export const getLiquidityPoolsTool: VibkitToolDefinition<
     'Retrieve pool state data from Camelot v3 including price, liquidity, and volume information',
   parameters: getLiquidityPoolsParametersSchema,
 
-  execute: async (params: GetLiquidityPoolsParams, context: any) => {
+  execute: async (params: GetLiquidityPoolsParams, context: { custom: RebalancerContext }) => {
     try {
       console.log('🔍 Getting liquidity pool data...');
 
       // Call Ember MCP server to get pool data
-      const response = await context.mcpClients['ember-onchain'].request(
-        {
-          method: 'tools/call',
-          params: {
-            name: 'getLiquidityPools',
-            arguments: {
-              poolAddress: params.poolAddress,
-              token0: params.token0,
-              token1: params.token1,
-              protocol: 'camelot-v3',
-            },
-          },
-        },
-        {}
-      );
+      const emberClient = context.custom.mcpClients['ember-onchain'];
+      if (!emberClient) {
+        throw new Error('Ember MCP client not available');
+      }
 
-      if (!response.result || !response.result.content) {
+      const response = await emberClient.callTool({
+        name: 'getLiquidityPools',
+        arguments: {
+          poolAddress: params.poolAddress,
+          token0: params.token0,
+          token1: params.token1,
+          protocol: 'camelot-v3',
+        },
+      });
+
+      if (!response || !response.content || !Array.isArray(response.content)) {
         throw new Error('No response from MCP server');
       }
 
-      const pools: PoolState[] = JSON.parse(response.result.content[0].text);
+      const firstContent = response.content[0];
+      if (!firstContent || !('text' in firstContent)) {
+        throw new Error('Invalid response format from MCP server');
+      }
+      const pools: PoolState[] = JSON.parse(firstContent.text);
 
       console.log(`✅ Retrieved data for ${pools.length} pools`);
 

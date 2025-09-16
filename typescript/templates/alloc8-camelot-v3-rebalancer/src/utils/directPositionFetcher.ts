@@ -31,11 +31,15 @@ interface Pool {
   token0Price: string;
   token1Price: string;
   tickSpacing: string;
+  sqrtPrice?: string;
 }
 
 interface MintOrBurn {
   tickLower: string;
   tickUpper: string;
+  amount0?: string;
+  amount1?: string;
+  amountUSD?: string;
 }
 
 interface Transaction {
@@ -67,8 +71,10 @@ export interface EnhancedPoolPosition extends PoolPosition {
     token0: string;
     token1: string;
   };
+  amountUSD?: string;
   currentTick?: number;
   tickSpacing?: number;
+  sqrtPrice?: string;
 }
 
 // -------------------- GraphQL Query --------------------
@@ -99,11 +105,15 @@ const ACTIVE_POSITIONS_QUERY = gql`
         token0Price
         token1Price
         tickSpacing
+        sqrtPrice
       }
       transaction {
         mints {
           tickLower
           tickUpper
+          amount0
+          amount1
+          amountUSD
         }
         burns {
           tickLower
@@ -163,9 +173,10 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
       // Calculate liquidity (simplified - in real implementation you'd need more complex calculation)
       const liquidity = positionInRange ? '1000000' : '0'; // Placeholder
 
-      // Calculate amounts (simplified - in real implementation you'd need proper calculation)
-      const amount0 = positionInRange ? '1000' : '0'; // Placeholder
-      const amount1 = positionInRange ? '1000' : '0'; // Placeholder
+      // Get actual amounts from mint data
+      const amount0 = mint.amount0 || '0';
+      const amount1 = mint.amount1 || '0';
+      const amountUSD = mint.amountUSD || '0';
 
       const enhancedPosition: EnhancedPoolPosition = {
         positionId: pos.id,
@@ -191,9 +202,13 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
         feesUSD: pool.feesUSD,
         currentTick: currentTick,
         tickSpacing: parseInt(pool.tickSpacing),
+        sqrtPrice: pool.sqrtPrice,
+        // Use actual position amounts from subgraph
+        amountUSD: amountUSD,
+        // Calculate TVL from actual position amounts
         tvlUSD: {
-          token0: pool.token0.totalValueLockedUSD,
-          token1: pool.token1.totalValueLockedUSD,
+          token0: amount0,
+          token1: amount1,
         },
       };
 
@@ -225,6 +240,15 @@ export async function fetchActivePositions(wallet: string): Promise<EnhancedPool
         console.log(
           `Price Range: ${pos.priceRange.lower.toFixed(6)} - ${pos.priceRange.upper.toFixed(6)}`
         );
+      }
+
+      if (pos.amountUSD) {
+        console.log(`Position Value: $${pos.amountUSD} USD`);
+      }
+
+      if (pos.amount0 && pos.amount1) {
+        console.log(`Amount0: ${pos.amount0}`);
+        console.log(`Amount1: ${pos.amount1}`);
       }
 
       if (pos.tvlUSD) {

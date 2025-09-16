@@ -35,13 +35,13 @@ export const swapTokensTool: VibkitToolDefinition<
   description: 'Swap tokens on Camelot DEX with slippage protection',
   parameters: swapTokensParametersSchema,
 
-  execute: async (params: SwapTokensParams, context: any) => {
+  execute: async (params: SwapTokensParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🔄 Swapping ${params.amountIn} ${params.tokenIn} for ${params.tokenOut}`);
 
       // Get wallet address from private key
       const { getWalletAddressFromPrivateKey } = await import('../utils/walletUtils.js');
-      const walletAddress = getWalletAddressFromPrivateKey(context.config.walletPrivateKey);
+      const walletAddress = getWalletAddressFromPrivateKey(context.custom.config.walletPrivateKey);
 
       // Note: Ember MCP server doesn't have a direct swap tool
       // This would need to be implemented using a different approach

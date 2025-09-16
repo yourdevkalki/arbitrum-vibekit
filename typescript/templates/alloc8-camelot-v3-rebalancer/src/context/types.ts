@@ -1,6 +1,7 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { AgentConfig } from '../config/types.js';
 import type TelegramBot from 'node-telegram-bot-api';
+import type { LanguageModelV1 } from 'ai';
 
 /**
  * Context shared across all tools and skills
@@ -13,7 +14,7 @@ export interface RebalancerContext {
   mcpClients: Record<string, Client>;
 
   // LLM model
-  llm?: any;
+  llm?: LanguageModelV1;
 
   // Telegram bot (if configured)
   telegramBot?: TelegramBot;
@@ -38,5 +39,5 @@ export interface RebalancerContext {
  */
 export interface ContextDependencies {
   mcpClients: Record<string, Client>;
-  llmModel?: any; // LLM model from provider selector
+  llmModel?: LanguageModelV1; // LLM model from provider selector
 }

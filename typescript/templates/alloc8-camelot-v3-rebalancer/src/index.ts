@@ -8,11 +8,6 @@ import 'dotenv/config';
 import { Agent, createProviderSelector, getAvailableProviders } from 'arbitrum-vibekit-core';
 import { contextProvider } from './context/provider.js';
 import { agentConfig } from './config/index.js';
-import { rebalancingSkill } from './skills/rebalancingSkill.js';
-import { monitoringSkill } from './skills/monitoringSkill.js';
-
-// Add skills to agent configuration
-agentConfig.skills = [rebalancingSkill, monitoringSkill];
 
 // Provider selector initialization
 const providers = createProviderSelector({
@@ -56,7 +51,7 @@ const agent = Agent.create(agentConfig, {
 });
 
 // Start the agent
-const PORT = parseInt(process.env.PORT || '3001', 10);
+const PORT = parseInt(process.env.PORT || '3002', 10);
 
 // Health check endpoint for production deployments
 export { agent };

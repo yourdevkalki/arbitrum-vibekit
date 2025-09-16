@@ -26,31 +26,37 @@ export const getWalletLiquidityPositionsTool: VibkitToolDefinition<
   description: 'Retrieve all liquidity positions for a wallet address from Camelot v3',
   parameters: getWalletLiquidityPositionsParametersSchema,
 
-  execute: async (params: GetWalletLiquidityPositionsParams, context: any) => {
+  execute: async (
+    params: GetWalletLiquidityPositionsParams,
+    context: { custom: RebalancerContext }
+  ) => {
     try {
       console.log(`🔍 Getting liquidity positions for wallet: ${params.walletAddress}`);
 
       // Call Ember MCP server to get wallet positions
-      const response = await context.mcpClients['ember-onchain'].request(
-        {
-          method: 'tools/call',
-          params: {
-            name: 'getWalletLiquidityPositions',
-            arguments: {
-              walletAddress: params.walletAddress,
-              poolAddress: params.poolAddress,
-              protocol: 'camelot-v3',
-            },
-          },
-        },
-        {}
-      );
+      const emberClient = context.custom.mcpClients['ember-onchain'];
+      if (!emberClient) {
+        throw new Error('Ember MCP client not available');
+      }
 
-      if (!response.result || !response.result.content) {
+      const response = await emberClient.callTool({
+        name: 'getWalletLiquidityPositions',
+        arguments: {
+          walletAddress: params.walletAddress,
+          poolAddress: params.poolAddress,
+          protocol: 'camelot-v3',
+        },
+      });
+
+      if (!response || !response.content || !Array.isArray(response.content)) {
         throw new Error('No response from MCP server');
       }
 
-      const positions: PoolPosition[] = JSON.parse(response.result.content[0].text);
+      const firstContent = response.content[0];
+      if (!firstContent || !('text' in firstContent)) {
+        throw new Error('Invalid response format from MCP server');
+      }
+      const positions: PoolPosition[] = JSON.parse(firstContent.text);
 
       console.log(`✅ Found ${positions.length} liquidity positions`);
 

@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import type { AgentConfig as VibekitAgentConfig } from 'arbitrum-vibekit-core';
 import { AgentConfigSchema, type AgentConfig } from './types.js';
+import { rebalancingSkill } from '../skills/rebalancingSkill.js';
+import { monitoringSkill } from '../skills/monitoringSkill.js';
 
 /**
  * Load and validate agent configuration from environment variables
@@ -52,7 +54,7 @@ export const agentConfig: VibekitAgentConfig = {
   description:
     process.env.AGENT_DESCRIPTION ||
     'Automated LP rebalancing agent for Camelot v3 concentrated liquidity pools with dynamic range adjustment and risk management',
-  skills: [], // Will be populated in index.ts
+  skills: [rebalancingSkill, monitoringSkill],
   url: process.env.AGENT_URL || 'localhost',
   capabilities: {
     streaming: true,

@@ -153,29 +153,29 @@ export const withdrawLiquidityTool: VibkitToolDefinition<
   description: 'Withdraw liquidity from a Camelot v3 concentrated liquidity position',
   parameters: withdrawLiquidityParametersSchema,
 
-  execute: async (params: WithdrawLiquidityParams, context: any) => {
+  execute: async (params: WithdrawLiquidityParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🔄 Withdrawing liquidity from position: ${params.positionId}`);
 
       // Get wallet address from private key
       const { getWalletAddressFromPrivateKey } = await import('../utils/walletUtils.js');
-      const walletAddress = getWalletAddressFromPrivateKey(context.config.walletPrivateKey);
+      const walletAddress = getWalletAddressFromPrivateKey(context.custom.config.walletPrivateKey);
 
       // Setup viem clients
       const publicClient = createPublicClient({
         chain: arbitrum,
-        transport: http(context.config.arbitrumRpcUrl),
+        transport: http(context.custom.config.arbitrumRpcUrl),
       });
 
-      const privateKey = context.config.walletPrivateKey.startsWith('0x')
-        ? (context.config.walletPrivateKey as `0x${string}`)
-        : (`0x${context.config.walletPrivateKey}` as `0x${string}`);
+      const privateKey = context.custom.config.walletPrivateKey.startsWith('0x')
+        ? (context.custom.config.walletPrivateKey as `0x${string}`)
+        : (`0x${context.custom.config.walletPrivateKey}` as `0x${string}`);
 
       const account = privateKeyToAccount(privateKey);
       const walletClient = createWalletClient({
         account,
         chain: arbitrum,
-        transport: http(context.config.arbitrumRpcUrl),
+        transport: http(context.custom.config.arbitrumRpcUrl),
       });
 
       console.log(`🔑 Wallet address: ${account.address}`);

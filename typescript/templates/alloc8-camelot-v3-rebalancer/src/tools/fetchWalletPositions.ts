@@ -37,7 +37,7 @@ export const fetchWalletPositionsTool: VibkitToolDefinition<
     'Automatically fetch all active Camelot v3 LP positions for the configured wallet across multiple chains',
   parameters: fetchWalletPositionsParametersSchema,
 
-  execute: async (params: FetchWalletPositionsParams, context: any) => {
+  execute: async (params: FetchWalletPositionsParams, context: { custom: RebalancerContext }) => {
     try {
       // Get wallet address from private key in config
       const privateKey = context.custom.config.walletPrivateKey;

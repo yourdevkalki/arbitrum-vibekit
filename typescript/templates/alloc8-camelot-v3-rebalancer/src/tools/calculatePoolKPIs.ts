@@ -387,7 +387,7 @@ export const calculatePoolKPIsTool: VibkitToolDefinition<
     'Calculate comprehensive KPIs for a Camelot v3 pool including liquidity, price, and volume metrics',
   parameters: calculatePoolKPIsParametersSchema,
 
-  execute: async (params: CalculatePoolKPIsParams, context: any) => {
+  execute: async (params: CalculatePoolKPIsParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🔍 Calculating KPIs for pool ${params.poolAddress}...`);
 
@@ -429,20 +429,6 @@ export const calculatePoolKPIsTool: VibkitToolDefinition<
       const currentPriceTick = parseInt(pool.tick || '0');
 
       console.log(`🔍 Current tick from subgraph: ${pool.tick} (parsed: ${currentPriceTick})`);
-
-      // Debug: Log raw data responses
-      console.log(`🔍 Raw liquidity data structure:`, {
-        hasData: !!liquidityData,
-        hasDataPool: !!(liquidityData as any)?.pool,
-        poolKeys: (liquidityData as any)?.pool ? Object.keys((liquidityData as any).pool) : [],
-        ticksCount: (liquidityData as any)?.pool?.ticks?.length || 0,
-      });
-
-      // Debug: Show the actual response structure
-      console.log(
-        `🔍 Full liquidity data response:`,
-        JSON.stringify(liquidityData, null, 2).substring(0, 1000) + '...'
-      );
 
       // Calculate all KPI categories
       const liquidityMetrics = calculateLPKPIs(liquidityData, 10, currentPriceTick);

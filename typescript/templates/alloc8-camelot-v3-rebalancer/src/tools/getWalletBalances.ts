@@ -35,7 +35,7 @@ export const getWalletBalancesTool: VibkitToolDefinition<
   description: 'Get token balances for a wallet address',
   parameters: getWalletBalancesParametersSchema,
 
-  execute: async (params: GetWalletBalancesParams, context: any) => {
+  execute: async (params: GetWalletBalancesParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🔍 Getting wallet balances for: ${params.walletAddress}`);
 
@@ -45,7 +45,7 @@ export const getWalletBalancesTool: VibkitToolDefinition<
 
       const publicClient = createPublicClient({
         chain: arbitrum,
-        transport: http(context.config.arbitrumRpcUrl),
+        transport: http(context.custom.config.arbitrumRpcUrl),
       });
 
       const erc20Abi = [

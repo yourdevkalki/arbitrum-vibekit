@@ -4,7 +4,6 @@ import type { VibkitToolDefinition } from 'arbitrum-vibekit-core';
 import { createSuccessTask, createErrorTask } from 'arbitrum-vibekit-core';
 import type { Task, Message } from '@google-a2a/types';
 import type { RebalancerContext } from '../context/types.js';
-import { calculateNewTickRange } from '../utils/priceCalculations.js';
 
 const analyzePositionWithLLMParametersSchema = z.object({
   positionId: z.string().describe('Position ID to analyze'),
@@ -15,7 +14,7 @@ const analyzePositionWithLLMParametersSchema = z.object({
       upper: z.number().describe('Current upper tick'),
     })
     .describe('Current position range'),
-  currentPrice: z.number().describe('Current token price'),
+  currentPrice: z.number().describe('Current token0-in-token1 price (e.g., ARB/USDC)'),
   token0Decimals: z.number().describe('Token0 decimals'),
   token1Decimals: z.number().describe('Token1 decimals'),
   tickSpacing: z.number().describe('Pool tick spacing'),
@@ -32,6 +31,175 @@ const analyzePositionWithLLMParametersSchema = z.object({
 });
 
 type AnalyzePositionWithLLMParams = z.infer<typeof analyzePositionWithLLMParametersSchema>;
+
+/**
+ * Deterministic range builder that converts LLM parameters to safe tick calculations
+ */
+function buildRangeFromParameters(
+  currentPrice: number,
+  halfWidthPct: number,
+  centerSkewPct: number = 0,
+  tickSpacing: number
+): { lower: number; upper: number; rangeWidthPct: number } {
+  // Constants
+  const LN_1p0001 = Math.log(1.0001);
+
+  // 1) Build price bounds in plain USD terms (token0-in-token1)
+  const P0 = currentPrice;
+
+  // Validate and clamp half width to reasonable range
+  const clampedHalfWidth = Math.max(0.1, Math.min(50, halfWidthPct)); // 0.1% to 50%
+  if (clampedHalfWidth !== halfWidthPct) {
+    console.warn(`⚠️  Half width ${halfWidthPct}% clamped to ${clampedHalfWidth}%`);
+  }
+
+  const w = clampedHalfWidth / 100;
+  const s = centerSkewPct / 100;
+
+  const Pcenter = P0 * (1 + s);
+  const P_lower_0in1 = Pcenter * (1 - w);
+  const P_upper_0in1 = Pcenter * (1 + w);
+
+  console.log(`🔍 Range building debug:`);
+  console.log(`   Current price (P0): ${P0}`);
+  console.log(`   Half width %: ${halfWidthPct}%`);
+  console.log(`   Center skew %: ${centerSkewPct}%`);
+  console.log(`   w (half width): ${w}`);
+  console.log(`   s (center skew): ${s}`);
+  console.log(`   Pcenter: ${Pcenter}`);
+  console.log(`   P_lower_0in1: ${P_lower_0in1}`);
+  console.log(`   P_upper_0in1: ${P_upper_0in1}`);
+
+  // 2) Convert to pool's price orientation (token1 per token0)
+  // Uniswap/Algebra ticks are on price_uni = token1/token0 = 1 / (token0/token1)
+  // No decimal scaling needed - use raw price values like the existing code
+  const U_lower = 1 / P_upper_0in1; // token1 per token0 (USDC per ARB)
+  const U_upper = 1 / P_lower_0in1;
+
+  console.log(`   U_lower (1/P_upper): ${U_lower}`);
+  console.log(`   U_upper (1/P_lower): ${U_upper}`);
+  console.log(`   ln(U_lower): ${Math.log(U_lower)}`);
+  console.log(`   ln(U_upper): ${Math.log(U_upper)}`);
+  console.log(`   ln(1.0001): ${LN_1p0001}`);
+
+  // 3) Convert prices → ticks
+  function priceToTick(price_uni: number): number {
+    return Math.floor(Math.log(price_uni) / LN_1p0001);
+  }
+
+  let rawLower = priceToTick(U_lower);
+  let rawUpper = priceToTick(U_upper);
+
+  console.log(`   Raw ticks: [${rawLower}, ${rawUpper}]`);
+
+  if (rawLower >= rawUpper) {
+    throw new Error('Range collapsed: lower tick >= upper tick');
+  }
+
+  // 4) Snap to on-chain spacing
+  function floorToSpacing(t: number, s: number): number {
+    return Math.floor(t / s) * s;
+  }
+
+  function ceilToSpacing(t: number, s: number): number {
+    return Math.ceil(t / s) * s;
+  }
+
+  const tickLower = floorToSpacing(rawLower, tickSpacing);
+  const tickUpper = ceilToSpacing(rawUpper, tickSpacing);
+
+  console.log(`   Final ticks: [${tickLower}, ${tickUpper}]`);
+
+  // 5) Sanity gate - convert back to human prices and verify
+  // Use simple tick-to-price conversion without decimal scaling
+  function tickToPriceSimple(tick: number): number {
+    return Math.pow(1.0001, tick);
+  }
+
+  // For sanity check, convert back to token0-in-token1 prices
+  const Ul = tickToPriceSimple(tickLower); // token1 per token0 (USDC per ARB)
+  const Uu = tickToPriceSimple(tickUpper);
+
+  // Convert back to token0-in-token1 (ARB/USDC) by taking reciprocal
+  const P_lower_check = 1 / Uu;
+  const P_upper_check = 1 / Ul;
+
+  console.log(`   Converted back to prices: [${P_lower_check}, ${P_upper_check}]`);
+
+  const inRange = P_lower_check < P0 && P0 < P_upper_check;
+  const widthPct = 100 * (P_upper_check / P0 - 1);
+
+  if (!inRange) {
+    throw new Error(
+      `LLM range build bug: current price ${P0} not in range [${P_lower_check}, ${P_upper_check}]`
+    );
+  }
+
+  if (widthPct < 1 || widthPct > 25) {
+    throw new Error(`Range width ${widthPct.toFixed(2)}% out of policy (1-25%)`);
+  }
+
+  return {
+    lower: tickLower,
+    upper: tickUpper,
+    rangeWidthPct: widthPct,
+  };
+}
+
+/**
+ * Calculate optimal amounts based on range-implied ratio
+ */
+function calculateOptimalAmounts(
+  currentPrice: number,
+  tickLower: number,
+  tickUpper: number,
+  available0: number,
+  available1: number
+): { amount0: number; amount1: number } {
+  // Use approximate sqrt calculations for amount sizing
+  function sqrtFromTick(tick: number): number {
+    return Math.sqrt(Math.pow(1.0001, tick));
+  }
+
+  const sqrtP = Math.sqrt(1 / currentPrice); // sqrt(price_uni) from human price
+  const sqrtPL = sqrtFromTick(tickLower);
+  const sqrtPU = sqrtFromTick(tickUpper);
+
+  let want0 = 0;
+  let want1 = 0;
+
+  if (sqrtP <= sqrtPL) {
+    // All token0 - price below range
+    want0 = available0 * 0.99;
+    want1 = 0;
+  } else if (sqrtP >= sqrtPU) {
+    // All token1 - price above range
+    want0 = 0;
+    want1 = available1 * 0.99;
+  } else {
+    // Inside range - match the theoretical ratio
+    // ratio R = amount0/amount1 at equal-L
+    const R = (sqrtPU - sqrtP) / (sqrtPU * sqrtP) / (sqrtP - sqrtPL);
+
+    // Fit to wallet
+    const maxBy0 = available0;
+    const maxBy1 = available1;
+    const by0_amt1 = maxBy0 / R;
+    const by1_amt0 = maxBy1 * R;
+
+    if (by0_amt1 <= maxBy1) {
+      // Token0 is limiting
+      want0 = 0.995 * maxBy0;
+      want1 = 0.995 * (maxBy0 / R);
+    } else {
+      // Token1 is limiting
+      want1 = 0.995 * maxBy1;
+      want0 = 0.995 * (maxBy1 * R);
+    }
+  }
+
+  return { amount0: want0, amount1: want1 };
+}
 
 /**
  * Generate fallback analysis when LLM is not available
@@ -90,15 +258,32 @@ function generateFallbackAnalysis(params: AnalyzePositionWithLLMParams, kpis: an
     action = 'rebalance';
     confidence = 0.7;
 
-    // Calculate new range using proper price calculations
-    newRange = calculateNewTickRange(
-      currentPrice,
-      volatility,
-      riskProfile,
-      token0Decimals,
-      token1Decimals,
-      tickSpacing
-    );
+    // Calculate new range using deterministic range builder
+    try {
+      // Map risk profile to half width percentage
+      const halfWidthPct = riskProfile === 'conservative' ? 3 : riskProfile === 'medium' ? 7 : 12;
+
+      console.log(`🔍 Fallback analysis - building range:`);
+      console.log(`   Risk profile: ${riskProfile}`);
+      console.log(`   Half width %: ${halfWidthPct}%`);
+      console.log(`   Current price: ${currentPrice}`);
+      console.log(`   Tick spacing: ${tickSpacing}`);
+
+      const rangeResult = buildRangeFromParameters(
+        currentPrice,
+        halfWidthPct,
+        0, // no center skew for fallback
+        tickSpacing
+      );
+
+      newRange = {
+        lower: rangeResult.lower,
+        upper: rangeResult.upper,
+      };
+    } catch (error) {
+      console.warn('Failed to build range in fallback analysis:', error);
+      // Keep current range if range building fails
+    }
   }
 
   return {
@@ -148,19 +333,46 @@ export const analyzePositionWithLLMTool: VibkitToolDefinition<
     'Analyze LP position using LLM to recommend optimal rebalancing ranges based on market conditions and KPIs',
   parameters: analyzePositionWithLLMParametersSchema,
 
-  execute: async (params: AnalyzePositionWithLLMParams, context: any) => {
+  execute: async (params: AnalyzePositionWithLLMParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🤖 Analyzing position ${params.positionId} with LLM...`);
 
       // Prepare analysis prompt for LLM
       const analysisPrompt = `
-You are an expert DeFi liquidity provider analyst specializing in Camelot v3 concentrated liquidity positions. 
+You are an expert DeFi LP analyst for Camelot v3 (Algebra).
 
-Analyze the following position and recommend optimal rebalancing ranges based on the provided KPIs and market conditions.
+Given the KPIs and market context, recommend ONLY these fields (JSON):
+{
+  "analysis": {
+    "position_health": "excellent|good|fair|poor",
+    "market_conditions": "favorable|neutral|unfavorable", 
+    "risk_level": "low|medium|high",
+    "key_insights": ["insight1", "insight2", "insight3"]
+  },
+  "recommendation": {
+    "action": "rebalance|maintain|withdraw",
+    "confidence": 0.0-1.0,
+    "reasoning": "Detailed explanation of recommendation",
+    "risk_level": "conservative|medium|aggressive",
+    "half_width_pct": number,     // percent half-width around current token0-in-token1 price (e.g., 5 means ±5%)
+    "center_skew_pct": number,    // optional, shift center by +/−% of current price; default 0
+    "expected_outcomes": {
+      "fee_earnings_potential": "high|medium|low",
+      "impermanent_loss_risk": "low|medium|high", 
+      "liquidity_utilization": "high|medium|low"
+    }
+  },
+  "monitoring_suggestions": {
+    "check_frequency_hours": number,
+    "rebalance_triggers": ["trigger1", "trigger2"],
+    "alert_conditions": ["condition1", "condition2"]
+  }
+}
 
 ## Position Details:
 - Position ID: ${params.positionId}
 - Pool Address: ${params.poolAddress}
+- Current Price: ${params.currentPrice} (token0-in-token1)
 - Current Range: [${params.currentRange.lower}, ${params.currentRange.upper}] ticks
 - Risk Profile: ${params.riskProfile}
 
@@ -178,55 +390,31 @@ ${JSON.stringify(params.kpis.volume_fee_metrics, null, 2)}
 ## Analysis Framework:
 
 1. **Current Position Health**: Assess if the position is in range and earning fees
-2. **Market Conditions**: Analyze volatility, liquidity distribution, and trading activity
+2. **Market Conditions**: Analyze volatility, liquidity distribution, and trading activity  
 3. **Risk Assessment**: Consider impermanent loss potential and concentration risk
-4. **Optimal Range Recommendation**: Suggest new tick range based on:
+4. **Range Recommendation**: Suggest range parameters based on:
    - Current price position
    - Volatility patterns
    - Liquidity concentration
    - Risk profile preferences
 
 ## Risk Profile Guidelines:
-- **Conservative**: Narrower ranges (2-5% around current price), lower impermanent loss risk
-- **Medium**: Balanced ranges (5-10% around current price), moderate risk/reward
-- **Aggressive**: Wider ranges (10-20% around current price), higher fee potential but more risk
+- **Conservative**: half_width_pct = 2-5%, lower impermanent loss risk
+- **Medium**: half_width_pct = 5-10%, moderate risk/reward
+- **Aggressive**: half_width_pct = 10-20%, higher fee potential but more risk
 
-## Response Format:
-Provide a JSON response with the following structure:
-{
-  "analysis": {
-    "position_health": "excellent|good|fair|poor",
-    "market_conditions": "favorable|neutral|unfavorable",
-    "risk_level": "low|medium|high",
-    "key_insights": ["insight1", "insight2", "insight3"]
-  },
-  "recommendation": {
-    "action": "rebalance|maintain|withdraw",
-    "confidence": 0.0-1.0,
-    "reasoning": "Detailed explanation of recommendation",
-    "new_range": {
-      "lower_tick": number,
-      "upper_tick": number,
-      "range_width_pct": number
-    },
-    "expected_outcomes": {
-      "fee_earnings_potential": "high|medium|low",
-      "impermanent_loss_risk": "low|medium|high",
-      "liquidity_utilization": "high|medium|low"
-    }
-  },
-  "monitoring_suggestions": {
-    "check_frequency_hours": number,
-    "rebalance_triggers": ["trigger1", "trigger2"],
-    "alert_conditions": ["condition1", "condition2"]
-  }
-}
+STRICT RULES:
+- DO NOT output ticks.
+- DO NOT output sqrt prices.
+- DO NOT output token amounts.
+- half_width_pct must be: conservative=2–5, medium=5–10, aggressive=10–20.
+- center_skew_pct usually 0; use only if liquidity skew or volatility strongly suggests bias.
 
 Focus on data-driven insights and provide specific, actionable recommendations.
 `;
 
       // Check if LLM is available
-      if (!context.llm) {
+      if (!context.custom.llm) {
         console.warn('⚠️  LLM not available, using fallback analysis');
         const fallbackAnalysis = generateFallbackAnalysis(params, params.kpis);
         console.log('🔍 Fallback analysis result:', JSON.stringify(fallbackAnalysis, null, 2));
@@ -243,8 +431,12 @@ Focus on data-driven insights and provide specific, actionable recommendations.
       }
 
       // Use the LLM to analyze the position
+      if (!context.custom.llm) {
+        throw new Error('LLM model not available in context');
+      }
+
       const llmResponse = await generateText({
-        model: context.llm,
+        model: context.custom.llm,
         messages: [
           {
             role: 'system',
@@ -269,6 +461,54 @@ Focus on data-driven insights and provide specific, actionable recommendations.
         if (jsonMatch) {
           analysisResult = JSON.parse(jsonMatch[0]);
           console.log('🔍 Parsed LLM analysis:', JSON.stringify(analysisResult, null, 2));
+
+          // Convert LLM range parameters to actual ticks using deterministic builder
+          if (
+            analysisResult.recommendation?.action === 'rebalance' &&
+            analysisResult.recommendation?.half_width_pct
+          ) {
+            try {
+              console.log(
+                `🤖 LLM recommended half_width_pct: ${analysisResult.recommendation.half_width_pct}%`
+              );
+              console.log(
+                `🤖 LLM recommended center_skew_pct: ${analysisResult.recommendation.center_skew_pct || 0}%`
+              );
+
+              const rangeResult = buildRangeFromParameters(
+                params.currentPrice,
+                analysisResult.recommendation.half_width_pct,
+                analysisResult.recommendation.center_skew_pct || 0,
+                params.tickSpacing
+              );
+
+              // Add the calculated range to the recommendation
+              analysisResult.recommendation.new_range = {
+                lower_tick: rangeResult.lower,
+                upper_tick: rangeResult.upper,
+                range_width_pct: rangeResult.rangeWidthPct,
+              };
+
+              console.log(
+                `✅ Built range from LLM parameters: [${rangeResult.lower}, ${rangeResult.upper}] ticks (${rangeResult.rangeWidthPct.toFixed(2)}% width)`
+              );
+            } catch (rangeError) {
+              console.warn('Failed to build range from LLM parameters:', rangeError);
+              // Fall back to current range if range building fails
+              analysisResult.recommendation.new_range = {
+                lower_tick: params.currentRange.lower,
+                upper_tick: params.currentRange.upper,
+                range_width_pct: 0,
+              };
+            }
+          } else {
+            // For maintain/withdraw actions, keep current range
+            analysisResult.recommendation.new_range = {
+              lower_tick: params.currentRange.lower,
+              upper_tick: params.currentRange.upper,
+              range_width_pct: 0,
+            };
+          }
         } else {
           throw new Error('No JSON found in LLM response');
         }
@@ -286,7 +526,11 @@ Focus on data-driven insights and provide specific, actionable recommendations.
             action: 'maintain',
             confidence: 0.5,
             reasoning: 'Unable to parse LLM analysis, maintaining current position',
-            new_range: params.currentRange,
+            new_range: {
+              lower_tick: params.currentRange.lower,
+              upper_tick: params.currentRange.upper,
+              range_width_pct: 0,
+            },
             expected_outcomes: {
               fee_earnings_potential: 'medium',
               impermanent_loss_risk: 'medium',
@@ -314,8 +558,13 @@ Focus on data-driven insights and provide specific, actionable recommendations.
       console.log(`   - Action: ${result.recommendation.action}`);
       console.log(`   - Confidence: ${(result.recommendation.confidence * 100).toFixed(1)}%`);
       console.log(
-        `   - New range: [${result.recommendation.new_range.lower_tick}, ${result.recommendation.new_range.upper_tick}]`
+        `   - New range: [${result.recommendation.new_range.lower_tick}, ${result.recommendation.new_range.upper_tick}] ticks`
       );
+      if (result.recommendation.new_range.range_width_pct > 0) {
+        console.log(
+          `   - Range width: ${result.recommendation.new_range.range_width_pct.toFixed(2)}%`
+        );
+      }
 
       return createSuccessTask(
         'analyzePositionWithLLM',

@@ -2,15 +2,13 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { loadAgentConfig } from '../config/index.js';
 import type { RebalancerContext, ContextDependencies } from './types.js';
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
 
 /**
  * Context provider for the rebalancing agent
  * Provides shared resources and configuration to all tools and skills
  */
-export const contextProvider = async (deps: {
-  mcpClients: Record<string, any>;
-  llmModel?: any;
-}) => {
+export const contextProvider = async (deps: ContextDependencies): Promise<RebalancerContext> => {
   // Load configuration
   const config = loadAgentConfig();
 
@@ -49,5 +47,5 @@ export const contextProvider = async (deps: {
       lastCheck: null,
       taskId: null,
     },
-  };
+  } as RebalancerContext;
 };

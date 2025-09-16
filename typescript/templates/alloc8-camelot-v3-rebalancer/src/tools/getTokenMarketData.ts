@@ -29,7 +29,7 @@ export const getTokenMarketDataTool: VibkitToolDefinition<
     'Retrieve live market data for tokens including price, volume, market cap, and volatility metrics',
   parameters: getTokenMarketDataParametersSchema,
 
-  execute: async (params: GetTokenMarketDataParams, context: any) => {
+  execute: async (params: GetTokenMarketDataParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🔍 Getting market data for tokens: ${params.tokens.join(', ')}`);
 

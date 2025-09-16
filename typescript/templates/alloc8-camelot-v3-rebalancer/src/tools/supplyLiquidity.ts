@@ -35,6 +35,7 @@ const supplyLiquidityParametersSchema = z.object({
     .describe('Slippage in basis points (default: 50 = 0.5%)'),
   sqrtPriceX96: z.string().optional().describe('Initial sqrt price for new pools'),
   recipient: z.string().optional().describe('Recipient address (defaults to wallet)'),
+  poolAddress: z.string().optional().describe('Pool address for tick spacing validation'),
 });
 
 type SupplyLiquidityParams = z.infer<typeof supplyLiquidityParametersSchema>;
@@ -124,6 +125,16 @@ const algebraPositionManagerAbi = [
   },
 ] as const satisfies Abi;
 
+const poolAbi = [
+  {
+    name: 'tickSpacing',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'int24' }],
+  },
+] as const satisfies Abi;
+
 // Transfer event (ERC-721) to decode minted tokenId
 const erc721TransferEvent = {
   type: 'event',
@@ -156,7 +167,7 @@ async function ensureAllowance(params: {
 
   if (allowance >= amount) return;
 
-  const MAX_UINT256 = (1n << 256n) - 1n;
+  const MAX_UINT256 = (BigInt(1) << BigInt(256)) - BigInt(1);
 
   const tx = await walletClient.writeContract({
     address: token,
@@ -164,6 +175,7 @@ async function ensureAllowance(params: {
     functionName: 'approve',
     args: [ALGEBRA_POSITION_MANAGER, MAX_UINT256],
     account: walletClient.account!,
+    chain: arbitrum,
   });
   console.log(`📝 Approve ${token} tx:`, tx);
 
@@ -174,7 +186,68 @@ async function ensureAllowance(params: {
  * Calculate minimum amounts with slippage protection
  */
 function toMin(amount: bigint, bps: number): bigint {
-  return (amount * BigInt(10_000 - bps)) / 10_000n;
+  return (amount * BigInt(10_000 - bps)) / BigInt(10_000);
+}
+
+/**
+ * Get pool address from token pair
+ */
+async function getPoolAddress(
+  publicClient: ReturnType<typeof createPublicClient>,
+  token0: Address,
+  token1: Address
+): Promise<Address> {
+  // For Camelot v3, we need to compute the pool address
+  // This is a simplified approach - in production you'd want to use the factory
+  // For now, we'll assume the pool address is known or can be derived
+  // In a real implementation, you'd call the factory's getPool function
+  throw new Error('Pool address resolution not implemented - needs factory integration');
+}
+
+/**
+ * Read tick spacing from pool
+ */
+async function getTickSpacing(
+  publicClient: ReturnType<typeof createPublicClient>,
+  poolAddress: Address
+): Promise<number> {
+  const tickSpacing = await publicClient.readContract({
+    address: poolAddress,
+    abi: poolAbi,
+    functionName: 'tickSpacing',
+  });
+  return Number(tickSpacing);
+}
+
+/**
+ * Align ticks to pool spacing
+ */
+function alignTicksToSpacing(
+  tickLower: number,
+  tickUpper: number,
+  spacing: number
+): { tickLower: number; tickUpper: number } {
+  // Snap lower tick outward (floor)
+  const alignedTickLower = Math.floor(tickLower / spacing) * spacing;
+
+  // Snap upper tick outward (ceil)
+  const alignedTickUpper = Math.ceil(tickUpper / spacing) * spacing;
+
+  // Validate alignment
+  if (alignedTickLower % spacing !== 0) {
+    throw new Error(`Lower tick ${alignedTickLower} is not aligned to spacing ${spacing}`);
+  }
+  if (alignedTickUpper % spacing !== 0) {
+    throw new Error(`Upper tick ${alignedTickUpper} is not aligned to spacing ${spacing}`);
+  }
+  if (alignedTickLower >= alignedTickUpper) {
+    throw new Error(`Invalid range: lower ${alignedTickLower} >= upper ${alignedTickUpper}`);
+  }
+
+  return {
+    tickLower: alignedTickLower,
+    tickUpper: alignedTickUpper,
+  };
 }
 
 /**
@@ -190,7 +263,7 @@ export const supplyLiquidityTool: VibkitToolDefinition<
     'Supply liquidity to a Camelot v3 concentrated liquidity pool within specified price range',
   parameters: supplyLiquidityParametersSchema,
 
-  execute: async (params: SupplyLiquidityParams, context: any) => {
+  execute: async (params: SupplyLiquidityParams, context: { custom: RebalancerContext }) => {
     try {
       console.log(`🔄 Supplying liquidity to pool: ${params.token0}/${params.token1}`);
       console.log(`   Range: tick ${params.tickLower} to ${params.tickUpper}`);
@@ -198,23 +271,23 @@ export const supplyLiquidityTool: VibkitToolDefinition<
 
       // Get wallet address from private key
       const { getWalletAddressFromPrivateKey } = await import('../utils/walletUtils.js');
-      const walletAddress = getWalletAddressFromPrivateKey(context.config.walletPrivateKey);
+      const walletAddress = getWalletAddressFromPrivateKey(context.custom.config.walletPrivateKey);
 
       // Setup viem clients
       const publicClient = createPublicClient({
         chain: arbitrum,
-        transport: http(context.config.arbitrumRpcUrl),
+        transport: http(context.custom.config.arbitrumRpcUrl),
       });
 
-      const privateKey = context.config.walletPrivateKey.startsWith('0x')
-        ? (context.config.walletPrivateKey as `0x${string}`)
-        : (`0x${context.config.walletPrivateKey}` as `0x${string}`);
+      const privateKey = context.custom.config.walletPrivateKey.startsWith('0x')
+        ? (context.custom.config.walletPrivateKey as `0x${string}`)
+        : (`0x${context.custom.config.walletPrivateKey}` as `0x${string}`);
 
       const account = privateKeyToAccount(privateKey);
       const walletClient = createWalletClient({
         account,
         chain: arbitrum,
-        transport: http(context.config.arbitrumRpcUrl),
+        transport: http(context.custom.config.arbitrumRpcUrl),
       });
 
       console.log(`🔑 Wallet address: ${account.address}`);
@@ -223,6 +296,36 @@ export const supplyLiquidityTool: VibkitToolDefinition<
       if (params.token0.toLowerCase() > params.token1.toLowerCase()) {
         throw new Error(
           'token0 must be lexicographically smaller than token1 (token0 < token1). Swap the params if needed.'
+        );
+      }
+
+      // Align ticks to pool spacing if pool address is provided
+      let alignedTickLower = params.tickLower;
+      let alignedTickUpper = params.tickUpper;
+
+      if (params.poolAddress) {
+        console.log(`🔍 Aligning ticks to pool spacing for pool: ${params.poolAddress}`);
+        try {
+          const tickSpacing = await getTickSpacing(publicClient, params.poolAddress as Address);
+          console.log(`📏 Pool tick spacing: ${tickSpacing}`);
+
+          const alignedTicks = alignTicksToSpacing(params.tickLower, params.tickUpper, tickSpacing);
+          alignedTickLower = alignedTicks.tickLower;
+          alignedTickUpper = alignedTicks.tickUpper;
+
+          console.log(`🎯 Original ticks: [${params.tickLower}, ${params.tickUpper}]`);
+          console.log(`🎯 Aligned ticks: [${alignedTickLower}, ${alignedTickUpper}]`);
+
+          if (alignedTickLower !== params.tickLower || alignedTickUpper !== params.tickUpper) {
+            console.log(`⚠️  Ticks were adjusted to align with pool spacing of ${tickSpacing}`);
+          }
+        } catch (error) {
+          console.warn(`⚠️  Could not align ticks to pool spacing: ${error}`);
+          console.log(`🔄 Using original ticks: [${params.tickLower}, ${params.tickUpper}]`);
+        }
+      } else {
+        console.log(
+          `⚠️  No pool address provided - using original ticks without alignment validation`
         );
       }
 
@@ -300,7 +403,7 @@ export const supplyLiquidityTool: VibkitToolDefinition<
       });
 
       // Create & initialize pool if needed
-      if (params.sqrtPriceX96 && BigInt(params.sqrtPriceX96) > 0n) {
+      if (params.sqrtPriceX96 && BigInt(params.sqrtPriceX96) > BigInt(0)) {
         console.log('🔄 Creating and initializing pool...');
         const initTx = await walletClient.writeContract({
           address: ALGEBRA_POSITION_MANAGER,
@@ -308,6 +411,7 @@ export const supplyLiquidityTool: VibkitToolDefinition<
           functionName: 'createAndInitializePoolIfNecessary',
           args: [params.token0 as Address, params.token1 as Address, BigInt(params.sqrtPriceX96)],
           account,
+          chain: arbitrum,
         });
         console.log('🌊 Pool create+init tx:', initTx);
         await publicClient.waitForTransactionReceipt({ hash: initTx });
@@ -323,8 +427,8 @@ export const supplyLiquidityTool: VibkitToolDefinition<
           {
             token0: params.token0 as Address,
             token1: params.token1 as Address,
-            tickLower: params.tickLower,
-            tickUpper: params.tickUpper,
+            tickLower: alignedTickLower,
+            tickUpper: alignedTickUpper,
             amount0Desired,
             amount1Desired,
             amount0Min,
@@ -334,7 +438,8 @@ export const supplyLiquidityTool: VibkitToolDefinition<
           },
         ],
         account,
-        value: 0n,
+        value: BigInt(0),
+        chain: arbitrum,
       });
 
       console.log('🆕 Mint position tx:', mintTxHash);
@@ -348,6 +453,9 @@ export const supplyLiquidityTool: VibkitToolDefinition<
           // Only logs from the NFPM
           if (log.address.toLowerCase() !== ALGEBRA_POSITION_MANAGER.toLowerCase()) continue;
 
+          // Check if log has topics property (some logs might not)
+          if (!('topics' in log) || !log.topics) continue;
+
           const decoded = decodeEventLog({
             abi: [erc721TransferEvent],
             data: log.data,
@@ -355,17 +463,25 @@ export const supplyLiquidityTool: VibkitToolDefinition<
             strict: false,
           });
 
-          if (decoded.eventName === 'Transfer') {
-            const from = decoded.args[0] as Address;
-            const to = decoded.args[1] as Address;
-            const tokenId = decoded.args[2] as bigint;
-            // Mint is from 0x0 to recipient
-            if (
-              from.toLowerCase() === zeroAddress &&
-              to.toLowerCase() === recipient.toLowerCase()
-            ) {
-              mintedTokenId = tokenId;
-              break;
+          if (
+            decoded &&
+            typeof decoded === 'object' &&
+            'eventName' in decoded &&
+            decoded.eventName === 'Transfer'
+          ) {
+            const args = decoded.args as any;
+            if (args && 'from' in args && 'to' in args && 'tokenId' in args) {
+              const from = args.from as Address;
+              const to = args.to as Address;
+              const tokenId = args.tokenId as bigint;
+              // Mint is from 0x0 to recipient
+              if (
+                from.toLowerCase() === zeroAddress &&
+                to.toLowerCase() === recipient.toLowerCase()
+              ) {
+                mintedTokenId = tokenId;
+                break;
+              }
             }
           }
         }

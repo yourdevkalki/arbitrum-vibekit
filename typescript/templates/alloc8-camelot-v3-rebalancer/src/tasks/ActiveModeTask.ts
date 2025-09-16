@@ -3,7 +3,6 @@
  */
 
 import { BaseRebalanceTask } from './BaseRebalanceTask.js';
-import { z } from 'zod';
 import { getWalletAddressFromPrivateKey } from '../utils/walletUtils.js';
 import type { RebalancerContext } from '../context/types.js';
 import type { TransactionResult } from '../config/types.js';
@@ -80,7 +79,7 @@ export class ActiveModeTask extends BaseRebalanceTask {
 
       if (needsSwap) {
         console.log('🔄 Step 2: Rebalancing token ratio...');
-        await this.rebalanceTokenRatio();
+        await this.rebalanceTokenRatio(evaluation.token0, evaluation.token1);
       } else {
         console.log('✅ Token ratio is balanced, skipping swap');
       }
@@ -158,7 +157,7 @@ export class ActiveModeTask extends BaseRebalanceTask {
   /**
    * Rebalance token ratio via swap
    */
-  private async rebalanceTokenRatio(): Promise<void> {
+  private async rebalanceTokenRatio(token0?: string, token1?: string): Promise<void> {
     // Import the required tools
     const { getWalletBalancesTool, swapTokensTool } = await import('../tools/index.js');
 
@@ -173,10 +172,18 @@ export class ActiveModeTask extends BaseRebalanceTask {
     // Get wallet balances
     const walletAddress = getWalletAddressFromPrivateKey(this.context.config.walletPrivateKey);
 
+    // Use passed token addresses or fall back to config
+    const token0Address = token0 || this.context.config.token0;
+    const token1Address = token1 || this.context.config.token1;
+
+    if (!token0Address || !token1Address) {
+      throw new Error('Token addresses not provided and not found in config');
+    }
+
     const balancesResult = await getWalletBalancesTool.execute(
       {
         walletAddress,
-        tokens: [this.context.config.token0!, this.context.config.token1!],
+        tokens: [token0Address, token1Address],
       },
       agentContext
     );
@@ -199,11 +206,12 @@ export class ActiveModeTask extends BaseRebalanceTask {
       throw new Error('Invalid artifact format from get wallet balances');
     }
 
-    const balances = JSON.parse(part.text);
+    const balancesData = JSON.parse(part.text);
+    const balances = balancesData.balances || [];
 
     // Simplified swap logic - swap 10% of larger balance
-    const token0Balance = balances.find((b: any) => b.symbol === this.context.config.token0);
-    const token1Balance = balances.find((b: any) => b.symbol === this.context.config.token1);
+    const token0Balance = balances.find((b: any) => b.address === token0Address);
+    const token1Balance = balances.find((b: any) => b.address === token1Address);
 
     if (token0Balance.usdValue > token1Balance.usdValue) {
       // Swap some token0 for token1
@@ -249,10 +257,19 @@ export class ActiveModeTask extends BaseRebalanceTask {
   private async supplyLiquidityAtNewRange(
     evaluation: any,
     poolAddress: string,
-    chainId: number
+    _chainId: number
   ): Promise<TransactionResult> {
     // Import the required tools
     const { getWalletBalancesTool, supplyLiquidityTool } = await import('../tools/index.js');
+
+    // Create public client for token operations
+    const { createPublicClient, http } = await import('viem');
+    const { arbitrum } = await import('viem/chains');
+
+    const publicClient = createPublicClient({
+      chain: arbitrum,
+      transport: http(this.context.config.arbitrumRpcUrl),
+    });
 
     // Create AgentContext wrapper
     const agentContext = {
@@ -330,37 +347,135 @@ export class ActiveModeTask extends BaseRebalanceTask {
     // Calculate the value of the old position to match it
     const currentPrice = evaluation.currentPrice;
 
-    // Use TVL data from the old position as reference
-    const oldPositionValue = evaluation.tvlUSD
-      ? parseFloat(evaluation.tvlUSD.token0) + parseFloat(evaluation.tvlUSD.token1)
-      : null;
+    // Get position value from subgraph data
+    const positionValueUSD = evaluation.amountUSD ? parseFloat(evaluation.amountUSD) : null;
 
-    // Calculate current wallet value
+    // Calculate current wallet value for comparison
     const token0Value = parseFloat(token0Balance.balanceFormatted) * currentPrice;
     const token1Value = parseFloat(token1Balance.balanceFormatted);
     const currentWalletValue = token0Value + token1Value;
 
     console.log(`💰 Position value analysis:`);
-    console.log(
-      `   Old position value (TVL): $${oldPositionValue ? oldPositionValue.toFixed(2) : 'Unknown'}`
-    );
+    if (positionValueUSD) {
+      console.log(`   Position value (from subgraph): $${positionValueUSD.toFixed(2)}`);
+    }
     console.log(`   Current wallet value: $${currentWalletValue.toFixed(2)}`);
     console.log(
       `   ${token0}: ${token0Balance.balanceFormatted} * $${currentPrice} = $${token0Value.toFixed(2)}`
     );
     console.log(`   ${token1}: ${token1Balance.balanceFormatted} = $${token1Value.toFixed(2)}`);
 
-    if (oldPositionValue) {
-      const valueDifference = currentWalletValue - oldPositionValue;
-      console.log(
-        `   Value difference: $${valueDifference.toFixed(2)} (${((valueDifference / oldPositionValue) * 100).toFixed(1)}%)`
-      );
-    }
+    // Use position value from subgraph as target, fallback to wallet value
+    const targetPositionValue = positionValueUSD || currentWalletValue;
 
-    // Use 95% of available balances (keep 5% for gas and slippage)
-    // This ensures we create a position of similar value to the old one
-    const amount0Desired = (parseFloat(token0Balance.balanceFormatted) * 0.95).toString();
-    const amount1Desired = (parseFloat(token1Balance.balanceFormatted) * 0.95).toString();
+    // Use proper liquidity math to maintain USD value
+    let amount0Desired: string;
+    let amount1Desired: string;
+
+    if (targetPositionValue && targetPositionValue > 0) {
+      console.log(
+        `🧮 Using liquidity math to maintain USD value of $${targetPositionValue.toFixed(2)}`
+      );
+
+      try {
+        // Import liquidity math utilities
+        const { calculateOptimalAmounts } = await import('../utils/liquidityMath.js');
+
+        // Get token decimals
+        const { getTokenDecimals } = await import('../utils/tokenUtils.js');
+        const [decimals0, decimals1] = await Promise.all([
+          getTokenDecimals(token0Id, publicClient),
+          getTokenDecimals(token1Id, publicClient),
+        ]);
+
+        // Calculate current sqrt price from current price
+        // For Uniswap v3/Algebra: sqrtP = sqrt(price)
+        const currentSqrtP = Math.sqrt(currentPrice);
+
+        // Get new tick range
+        const newTickLower =
+          evaluation.recommendation?.newRange?.lower || evaluation.suggestedRange?.tickLower;
+        const newTickUpper =
+          evaluation.recommendation?.newRange?.upper || evaluation.suggestedRange?.tickUpper;
+
+        if (!newTickLower || !newTickUpper) {
+          throw new Error('New tick range not provided');
+        }
+
+        console.log(`🔍 Debug - Tick range validation:`);
+        console.log(`   Current price: ${currentPrice}`);
+        console.log(`   Current sqrt price: ${currentSqrtP}`);
+        console.log(`   New tick lower: ${newTickLower}`);
+        console.log(`   New tick upper: ${newTickUpper}`);
+        console.log(`   Tick range valid: ${newTickLower < newTickUpper}`);
+
+        // Calculate what price range these ticks represent
+        const { tickToPrice } = await import('../utils/priceCalculations.js');
+        const priceLower = tickToPrice(newTickLower, decimals0, decimals1);
+        const priceUpper = tickToPrice(newTickUpper, decimals0, decimals1);
+        console.log(`   Price range: [${priceLower}, ${priceUpper}]`);
+        console.log(
+          `   Current price in range: ${priceLower <= currentPrice && currentPrice <= priceUpper}`
+        );
+
+        // Check if the tick range is reasonable
+        const priceRangeReasonable = priceLower > 0 && priceUpper > 0 && priceLower < priceUpper;
+        const currentPriceReasonable = currentPrice > 0 && currentPrice < 1000; // Reasonable price range
+
+        if (!priceRangeReasonable || !currentPriceReasonable) {
+          console.warn(`⚠️  Invalid tick range or price detected:`);
+          console.warn(`   Price range reasonable: ${priceRangeReasonable}`);
+          console.warn(`   Current price reasonable: ${currentPriceReasonable}`);
+          console.warn(`   Skipping liquidity math and using fallback`);
+          throw new Error('Invalid tick range or price detected');
+        }
+
+        // Calculate optimal amounts to maintain USD value
+        let optimalAmounts;
+        try {
+          optimalAmounts = calculateOptimalAmounts(
+            targetPositionValue, // Target USD value
+            currentSqrtP, // Current sqrt price
+            newTickLower, // New lower tick
+            newTickUpper, // New upper tick
+            currentPrice, // Token0 price (in terms of token1)
+            1.0, // Token1 price (always 1.0 for USDC)
+            decimals0, // Token0 decimals
+            decimals1 // Token1 decimals
+          );
+        } catch (error) {
+          console.warn(`⚠️  Liquidity math failed: ${error}`);
+          console.log(`🔄 Falling back to 95% of wallet balances`);
+          throw error; // Re-throw to trigger the fallback in the catch block
+        }
+
+        // Convert to formatted strings
+        amount0Desired = (Number(optimalAmounts.amount0) / Math.pow(10, decimals0)).toString();
+        amount1Desired = (Number(optimalAmounts.amount1) / Math.pow(10, decimals1)).toString();
+
+        console.log(`🎯 Optimal amounts calculated:`);
+        console.log(
+          `   ${token0}: ${amount0Desired} (${(parseFloat(amount0Desired) * currentPrice).toFixed(2)} USD)`
+        );
+        console.log(
+          `   ${token1}: ${amount1Desired} (${parseFloat(amount1Desired).toFixed(2)} USD)`
+        );
+        console.log(`   Target USD value: $${targetPositionValue.toFixed(2)}`);
+      } catch (error) {
+        console.warn(`⚠️  Liquidity math failed: ${error}`);
+        console.log(`🔄 Falling back to 95% of wallet balances`);
+
+        // Fallback to simple approach
+        amount0Desired = (parseFloat(token0Balance.balanceFormatted) * 0.95).toString();
+        amount1Desired = (parseFloat(token1Balance.balanceFormatted) * 0.95).toString();
+      }
+    } else {
+      console.log(`🔄 Using 95% of wallet balances (no previous position value available)`);
+
+      // Fallback to simple approach
+      amount0Desired = (parseFloat(token0Balance.balanceFormatted) * 0.95).toString();
+      amount1Desired = (parseFloat(token1Balance.balanceFormatted) * 0.95).toString();
+    }
 
     console.log(`🔄 Creating new position with:`);
     console.log(
@@ -382,6 +497,7 @@ export class ActiveModeTask extends BaseRebalanceTask {
         amount0Desired,
         amount1Desired,
         slippageBps: 200, // 2% slippage (increased from 0.5% to handle market volatility)
+        poolAddress: poolAddress, // Pass pool address for tick alignment
       },
       agentContext
     );

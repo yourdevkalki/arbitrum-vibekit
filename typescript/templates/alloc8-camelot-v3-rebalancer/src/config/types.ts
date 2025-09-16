@@ -220,6 +220,7 @@ export interface RebalanceEvaluation {
   token0Symbol: string;
   token1Symbol: string;
   // Position value information
+  amountUSD?: string;
   tvlUSD?: {
     token0: string;
     token1: string;
